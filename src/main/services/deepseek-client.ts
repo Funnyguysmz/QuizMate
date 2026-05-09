@@ -6,8 +6,6 @@ import * as https from 'https';
 import * as http from 'http';
 
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
-const PROXY_HOST = '127.0.0.1';
-const PROXY_PORT = 7897;
 
 function buildPrompt(files: string[], questionCount: number, topic?: string): { system: string; user: string } {
   const focusInstruction = topic
@@ -53,19 +51,83 @@ Return a JSON object:
   return { system, user };
 }
 
-function makeRequest(body: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(DEEPSEEK_ENDPOINT);
-    const payload = JSON.stringify(body);
+function apiRequest(body: any, apiKey: string): Promise<any> {
+  const url = new URL(DEEPSEEK_ENDPOINT);
+  const payload = JSON.stringify(body);
 
+  const proxyUrl = process.env.https_proxy || process.env.HTTPS_PROXY || '';
+  const useProxy = !!proxyUrl;
+
+  if (useProxy) {
+    return requestViaProxy(proxyUrl, url, payload, apiKey);
+  }
+  return requestDirect(url, payload, apiKey);
+}
+
+function requestDirect(url: URL, payload: string, apiKey: string): Promise<any> {
+  return new Promise((resolve, reject) => {
     const options: https.RequestOptions = {
-      hostname: PROXY_HOST,
-      port: PROXY_PORT,
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => data += chunk.toString());
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          if (res.statusCode !== 200) {
+            reject(new Error(result.error?.message || `API error: ${res.statusCode}`));
+            return;
+          }
+          resolve(result);
+        } catch (e) {
+          reject(new Error(`Failed to parse API response: ${data.substring(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(new Error(`DeepSeek API request failed: ${err.message}`));
+    });
+
+    req.setTimeout(60000, () => {
+      req.destroy();
+      reject(new Error('DeepSeek API request timed out'));
+    });
+
+    req.write(payload);
+    req.end();
+  });
+}
+
+function requestViaProxy(proxyUrl: string, targetUrl: URL, payload: string, apiKey: string): Promise<any> {
+  let proxy: URL;
+  try {
+    proxy = new URL(proxyUrl);
+  } catch {
+    return requestDirect(targetUrl, payload, apiKey);
+  }
+
+  return new Promise((resolve, reject) => {
+    const options: http.RequestOptions = {
+      hostname: proxy.hostname,
+      port: parseInt(proxy.port) || 7897,
       path: DEEPSEEK_ENDPOINT,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        'Authorization': `Bearer ${apiKey}`,
+        'Host': targetUrl.hostname,
       },
     };
 
@@ -87,7 +149,12 @@ function makeRequest(body: any): Promise<any> {
     });
 
     req.on('error', (err) => {
-      reject(new Error(`DeepSeek API request failed: ${err.message}\nMake sure proxy is running at ${PROXY_HOST}:${PROXY_PORT}`));
+      reject(new Error(`DeepSeek API request failed: ${err.message}`));
+    });
+
+    req.setTimeout(60000, () => {
+      req.destroy();
+      reject(new Error('DeepSeek API request timed out'));
     });
 
     req.write(payload);
@@ -100,7 +167,6 @@ function parseQuizResponse(data: any): any[] {
   if (!content) throw new Error('Empty response from DeepSeek');
 
   let jsonStr = content.trim();
-  // Remove markdown code fences if present
   if (jsonStr.startsWith('```')) {
     jsonStr = jsonStr.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
   }
@@ -133,55 +199,9 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
     stream: false,
   };
 
-  // Proxy auth header
-  const apiKey = settings.apiKey;
-
-  // Need to inject auth into proxy chain via headers
-  const url = new URL(DEEPSEEK_ENDPOINT);
-  const payload = JSON.stringify(requestBody);
-
-  const response = await new Promise<any>((resolve, reject) => {
-    const options: http.RequestOptions = {
-      hostname: PROXY_HOST,
-      port: PROXY_PORT,
-      path: DEEPSEEK_ENDPOINT,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-        'Authorization': `Bearer ${apiKey}`,
-        'Host': url.hostname,
-      },
-    };
-
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => data += chunk.toString());
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(data);
-          if (res.statusCode !== 200) {
-            reject(new Error(result.error?.message || `API error: ${res.statusCode}`));
-            return;
-          }
-          resolve(result);
-        } catch (e) {
-          reject(new Error(`Failed to parse API response: ${data.substring(0, 200)}`));
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      reject(new Error(`DeepSeek API request failed: ${err.message}\nMake sure proxy is running at ${PROXY_HOST}:${PROXY_PORT}`));
-    });
-
-    req.write(payload);
-    req.end();
-  });
-
+  const response = await apiRequest(requestBody, settings.apiKey);
   const questions = parseQuizResponse(response);
 
-  // Store in database
   const db = getDatabase();
   const sourceFiles = input.files;
   const title = `Quiz - ${new Date().toLocaleDateString('zh-CN')} (${questions.length} questions)`;
@@ -197,7 +217,6 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
 
-  const insertedQuestions: any[] = [];
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i];
     insertQuestion.run(

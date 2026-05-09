@@ -109,15 +109,6 @@ The app uses SQLite for local data storage. Database file location:
 
 Tables: `study_plans`, `quiz_sessions`, `quiz_questions`, `wrong_answers`, `app_settings`.
 
-## Proxy Configuration
-
-The app connects to DeepSeek API through a local proxy. Configure the proxy in `src/main/services/deepseek-client.ts`:
-
-```typescript
-const PROXY_HOST = '127.0.0.1';
-const PROXY_PORT = 7897;
-```
-
 ## License
 
 MIT
@@ -217,15 +208,6 @@ npm run package:win
 - **Windows**: `%APPDATA%/quizmate/study-app.db`
 
 数据表：`study_plans`、`quiz_sessions`、`quiz_questions`、`wrong_answers`、`app_settings`。
-
-## 代理配置
-
-应用通过本地代理连接 DeepSeek API。可在 `src/main/services/deepseek-client.ts` 中修改代理配置：
-
-```typescript
-const PROXY_HOST = '127.0.0.1';
-const PROXY_PORT = 7897;
-```
 
 ## 许可证
 

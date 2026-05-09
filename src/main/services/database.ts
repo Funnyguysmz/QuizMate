@@ -1,0 +1,93 @@
+import Database from 'better-sqlite3';
+import path from 'path';
+import { app } from 'electron';
+
+let db: Database.Database | null = null;
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS study_plans (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT NOT NULL,
+    category        TEXT,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    priority        INTEGER NOT NULL DEFAULT 0,
+    notes           TEXT,
+    source_file     TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_plans_status ON study_plans(status);
+CREATE INDEX IF NOT EXISTS idx_study_plans_category ON study_plans(category);
+
+CREATE TABLE IF NOT EXISTS quiz_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT NOT NULL,
+    source_files    TEXT NOT NULL DEFAULT '[]',
+    total_questions INTEGER NOT NULL,
+    correct_count   INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS quiz_questions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL,
+    question_number INTEGER NOT NULL,
+    question_text   TEXT NOT NULL,
+    options         TEXT NOT NULL DEFAULT '[]',
+    correct_answer  TEXT NOT NULL,
+    explanation     TEXT,
+    source_file     TEXT,
+    user_answer     TEXT,
+    is_correct      INTEGER,
+    answered_at     TEXT,
+    FOREIGN KEY (session_id) REFERENCES quiz_sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_session ON quiz_questions(session_id);
+
+CREATE TABLE IF NOT EXISTS wrong_answers (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id     INTEGER,
+    session_id      INTEGER NOT NULL,
+    question_text   TEXT NOT NULL,
+    options         TEXT NOT NULL DEFAULT '[]',
+    correct_answer  TEXT NOT NULL,
+    explanation     TEXT,
+    user_answer     TEXT NOT NULL,
+    source_file     TEXT,
+    category        TEXT,
+    review_count    INTEGER NOT NULL DEFAULT 0,
+    last_correct    INTEGER,
+    status          TEXT NOT NULL DEFAULT 'unresolved',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_wrong_answers_status ON wrong_answers(status);
+CREATE INDEX IF NOT EXISTS idx_wrong_answers_category ON wrong_answers(category);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`;
+
+export function initDatabase(): void {
+  const dbPath = path.join(app.getPath('userData'), 'study-app.db');
+  db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  db.exec(SCHEMA);
+}
+
+export function getDatabase(): Database.Database {
+  if (!db) {
+    throw new Error('Database not initialized. Call initDatabase() first.');
+  }
+  return db;
+}

@@ -1,15 +1,24 @@
 import { ipcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/types';
 import { getDatabase } from '../services/database';
+import { generateStudyMaterials, generateStudyTodos } from '../services/deepseek-client';
 import type { CreatePlanInput, UpdatePlanInput, PlanFilters } from '../../shared/types';
+
+function mapPlanRow(row: any) {
+  return {
+    ...row,
+    tags: JSON.parse(row.tags || '[]'),
+    source_files: JSON.parse(row.source_files || '[]'),
+  };
+}
 
 export function registerDatabaseHandlers() {
   // Plans CRUD
   ipcMain.handle(IPC_CHANNELS.PLANS_CREATE, (_event, input: CreatePlanInput) => {
     const db = getDatabase();
     const stmt = db.prepare(
-      `INSERT INTO study_plans (title, category, tags, status, priority, notes, source_file)
-       VALUES (@title, @category, @tags, @status, @priority, @notes, @source_file)`
+      `INSERT INTO study_plans (title, category, tags, status, priority, notes, source_file, source_files, generated_material, material_file, ai_generated)
+       VALUES (@title, @category, @tags, @status, @priority, @notes, @source_file, @source_files, @generated_material, @material_file, @ai_generated)`
     );
     const result = stmt.run({
       title: input.title,
@@ -19,9 +28,13 @@ export function registerDatabaseHandlers() {
       priority: input.priority || 0,
       notes: input.notes || null,
       source_file: input.source_file || null,
+      source_files: JSON.stringify(input.source_files || (input.source_file ? [input.source_file] : [])),
+      generated_material: input.generated_material || null,
+      material_file: input.material_file || null,
+      ai_generated: input.ai_generated || 0,
     });
     const row = db.prepare('SELECT * FROM study_plans WHERE id = ?').get(result.lastInsertRowid) as any;
-    return { ...row, tags: JSON.parse(row.tags) };
+    return mapPlanRow(row);
   });
 
   ipcMain.handle(IPC_CHANNELS.PLANS_UPDATE, (_event, id: number, input: UpdatePlanInput) => {
@@ -35,17 +48,22 @@ export function registerDatabaseHandlers() {
     if (input.status !== undefined) { fields.push('status = @status'); values.status = input.status; }
     if (input.priority !== undefined) { fields.push('priority = @priority'); values.priority = input.priority; }
     if (input.notes !== undefined) { fields.push('notes = @notes'); values.notes = input.notes; }
+    if (input.source_file !== undefined) { fields.push('source_file = @source_file'); values.source_file = input.source_file || null; }
+    if (input.source_files !== undefined) { fields.push('source_files = @source_files'); values.source_files = JSON.stringify(input.source_files); }
+    if (input.generated_material !== undefined) { fields.push('generated_material = @generated_material'); values.generated_material = input.generated_material || null; }
+    if (input.material_file !== undefined) { fields.push('material_file = @material_file'); values.material_file = input.material_file || null; }
+    if (input.ai_generated !== undefined) { fields.push('ai_generated = @ai_generated'); values.ai_generated = input.ai_generated; }
 
     if (fields.length === 0) {
       const row = db.prepare('SELECT * FROM study_plans WHERE id = ?').get(id) as any;
-      return { ...row, tags: JSON.parse(row.tags) };
+      return mapPlanRow(row);
     }
 
     fields.push("updated_at = datetime('now')");
     db.prepare(`UPDATE study_plans SET ${fields.join(', ')} WHERE id = @id`).run(values);
 
     const row = db.prepare('SELECT * FROM study_plans WHERE id = ?').get(id) as any;
-    return { ...row, tags: JSON.parse(row.tags) };
+    return mapPlanRow(row);
   });
 
   ipcMain.handle(IPC_CHANNELS.PLANS_DELETE, (_event, id: number) => {
@@ -74,13 +92,21 @@ export function registerDatabaseHandlers() {
 
     query += ' ORDER BY priority DESC, created_at DESC';
     const rows = db.prepare(query).all(params) as any[];
-    return rows.map(row => ({ ...row, tags: JSON.parse(row.tags) }));
+    return rows.map(mapPlanRow);
   });
 
   ipcMain.handle(IPC_CHANNELS.PLANS_GET, (_event, id: number) => {
     const db = getDatabase();
     const row = db.prepare('SELECT * FROM study_plans WHERE id = ?').get(id) as any;
     if (!row) return null;
-    return { ...row, tags: JSON.parse(row.tags) };
+    return mapPlanRow(row);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.PLANS_GENERATE_TODOS, (_event, input) => {
+    return generateStudyTodos(input);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.PLANS_GENERATE_MATERIALS, (_event, input) => {
+    return generateStudyMaterials(input);
   });
 }

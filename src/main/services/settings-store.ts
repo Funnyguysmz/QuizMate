@@ -4,7 +4,7 @@ import fs from 'fs';
 import type { AppSettings } from '../../shared/types';
 
 const defaultSettings: AppSettings = {
-  study_materials_path: '/Users/mac/Desktop/Halo博客文稿',
+  study_materials_path: getDefaultStudyMaterialsPath(),
   quiz_default_count: 5,
   quiz_model: 'deepseek-v4-flash',
   dark_mode: false,
@@ -18,6 +18,25 @@ interface SettingsData {
 
 let settingsPath: string;
 let cache: SettingsData | null = null;
+
+function getDefaultStudyMaterialsPath(): string {
+  const home = app.getPath('home');
+
+  // Priority 1: iCloud Documents folder
+  const iCloudDocs = path.join(home, 'Library/Mobile Documents/com~apple~CloudDocs/Documents');
+  if (fs.existsSync(iCloudDocs)) {
+    return iCloudDocs;
+  }
+
+  // Priority 2: iCloud root folder
+  const iCloudRoot = path.join(home, 'Library/Mobile Documents/com~apple~CloudDocs');
+  if (fs.existsSync(iCloudRoot)) {
+    return iCloudRoot;
+  }
+
+  // Priority 3: system Documents folder
+  return app.getPath('documents');
+}
 
 function getSettingsPath(): string {
   if (!settingsPath) {

@@ -41,9 +41,19 @@ export function SettingsPage() {
   }
 
   async function handlePickFolder() {
-    const folder = await window.electronAPI.openFolderDialog();
+    const folder = await window.electronAPI.openFolderDialog(settings?.study_materials_path);
     if (folder && settings) {
-      setSettings({ ...settings, study_materials_path: folder });
+      try {
+        const updated = await window.electronAPI.updateSettings({
+          study_materials_path: folder,
+        });
+        setSettings(updated);
+        setMessage('资料路径已保存');
+        setTimeout(() => setMessage(''), 3000);
+      } catch (e) {
+        setMessage('保存失败');
+        setTimeout(() => setMessage(''), 3000);
+      }
     }
   }
 

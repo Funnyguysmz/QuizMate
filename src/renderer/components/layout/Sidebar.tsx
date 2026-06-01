@@ -14,7 +14,7 @@ const navItems = [
 export function Sidebar() {
   return (
     <aside className="w-56 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col shrink-0">
-      <div className="h-12 drag-region flex items-center px-4 border-b border-gray-200 dark:border-gray-800">
+      <div className="h-14 drag-region flex items-center pl-[92px] pr-4 border-b border-gray-200 dark:border-gray-800">
         <div className="flex items-center gap-2 no-drag">
           <div className="w-7 h-7 bg-primary-500 rounded-lg flex items-center justify-center">
             <span className="text-white text-sm font-bold">IS</span>

@@ -20,8 +20,9 @@ export function registerFileSystemHandlers() {
     await shell.openPath(filePath);
   });
 
-  ipcMain.handle(IPC_CHANNELS.DIALOG_OPEN_FOLDER, async () => {
+  ipcMain.handle(IPC_CHANNELS.DIALOG_OPEN_FOLDER, async (_event, defaultPath?: string) => {
     const result = await dialog.showOpenDialog({
+      defaultPath,
       properties: ['openDirectory'],
     });
     if (result.canceled || result.filePaths.length === 0) {

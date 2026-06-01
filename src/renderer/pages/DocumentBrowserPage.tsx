@@ -3,7 +3,7 @@ import { FileTree } from '../components/browser/FileTree';
 import { MarkdownViewer } from '../components/browser/MarkdownViewer';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { EmptyState } from '../components/shared/EmptyState';
-import type { FileNode } from '../../shared/types';
+import type { FileNode, AppSettings } from '../../shared/types';
 
 export function DocumentBrowserPage() {
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
@@ -11,6 +11,8 @@ export function DocumentBrowserPage() {
   const [content, setContent] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [contentLoading, setContentLoading] = useState(false);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     loadFileTree();
@@ -18,13 +20,39 @@ export function DocumentBrowserPage() {
 
   async function loadFileTree() {
     try {
-      const settings = await window.electronAPI.getSettings();
-      const tree = await window.electronAPI.getFileTree(settings.study_materials_path);
+      const s = await window.electronAPI.getSettings();
+      setSettings(s);
+      const tree = await window.electronAPI.getFileTree(s.study_materials_path);
       setFileTree(tree);
+      setLoadError(null);
     } catch (e) {
       console.error('Failed to load file tree:', e);
+      setLoadError('无法加载文件列表');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handlePickFolder() {
+    const folder = await window.electronAPI.openFolderDialog(
+      settings?.study_materials_path,
+    );
+    if (folder) {
+      try {
+        const updated = await window.electronAPI.updateSettings({
+          study_materials_path: folder,
+        });
+        setSettings(updated);
+        setSelectedFile(null);
+        setContent('');
+        setContentLoading(false);
+        const tree = await window.electronAPI.getFileTree(folder);
+        setFileTree(tree);
+        setLoadError(null);
+      } catch (e) {
+        console.error('Failed to update settings:', e);
+        setLoadError('无法切换资料文件夹');
+      }
     }
   }
 
@@ -63,7 +91,24 @@ export function DocumentBrowserPage() {
           </button>
         </div>
         {fileTree.length === 0 ? (
-          <p className="text-sm text-gray-400 mt-4 text-center">文件夹为空</p>
+          <div className="text-sm text-gray-400 mt-4 text-center space-y-3">
+            {loadError ? (
+              <p>{loadError}</p>
+            ) : (
+              <p>文件夹为空</p>
+            )}
+            {settings?.study_materials_path && (
+              <p className="text-xs text-gray-500 truncate px-2">
+                当前路径: {settings.study_materials_path}
+              </p>
+            )}
+            <button
+              onClick={handlePickFolder}
+              className="text-xs text-primary-500 hover:text-primary-600 transition-colors underline"
+            >
+              选择资料文件夹
+            </button>
+          </div>
         ) : (
           <FileTree
             nodes={fileTree}

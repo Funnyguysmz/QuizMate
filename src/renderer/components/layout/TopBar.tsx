@@ -17,8 +17,11 @@ export function TopBar() {
   const title = pageTitles[basePath] || 'Interview Study';
 
   return (
-    <header className="h-12 drag-region flex items-center px-6 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shrink-0">
-      <h1 className="text-sm font-medium text-gray-700 dark:text-gray-300 no-drag">{title}</h1>
+    <header className="h-14 drag-region flex items-center justify-between px-6 border-b border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shrink-0">
+      <div className="no-drag">
+        <h1 className="text-sm font-semibold text-gray-900 dark:text-white">{title}</h1>
+        <p className="text-xs text-gray-400 dark:text-gray-500">QuizMate 本地学习知识库</p>
+      </div>
     </header>
   );
 }

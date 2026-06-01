@@ -95,3 +95,32 @@ export function searchInFiles(dirPath: string, query: string): SearchResult[] {
   searchDir(dirPath);
   return results;
 }
+
+export function collectMarkdownFiles(dirPath: string, limit = 24): string[] {
+  const files: string[] = [];
+
+  if (!fs.existsSync(dirPath)) return files;
+
+  function walk(currentPath: string) {
+    if (files.length >= limit) return;
+
+    const entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (files.length >= limit) return;
+      if (IGNORE_PATTERNS.includes(entry.name) || entry.name.startsWith('.')) continue;
+
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (SUPPORTED_EXTENSIONS.includes(ext)) {
+          files.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(dirPath);
+  return files;
+}

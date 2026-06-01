@@ -7,6 +7,9 @@ import type {
   CreatePlanInput,
   UpdatePlanInput,
   PlanFilters,
+  GenerateStudyMaterialsInput,
+  GenerateStudyTodosInput,
+  GeneratedStudyMaterialsResult,
   QuizSession,
   QuizSessionWithQuestions,
   QuizGenerateInput,
@@ -45,6 +48,12 @@ const electronAPI = {
 
   getPlan: (id: number): Promise<StudyPlan> =>
     ipcRenderer.invoke(IPC_CHANNELS.PLANS_GET, id),
+
+  generateStudyTodos: (input: GenerateStudyTodosInput): Promise<StudyPlan[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PLANS_GENERATE_TODOS, input),
+
+  generateStudyMaterials: (input: GenerateStudyMaterialsInput): Promise<GeneratedStudyMaterialsResult> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PLANS_GENERATE_MATERIALS, input),
 
   // Quiz
   generateQuiz: (input: QuizGenerateInput): Promise<QuizSessionWithQuestions> =>
@@ -93,8 +102,8 @@ const electronAPI = {
     ipcRenderer.invoke(IPC_CHANNELS.API_KEY_DELETE),
 
   // Dialog
-  openFolderDialog: (): Promise<string | null> =>
-    ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN_FOLDER),
+  openFolderDialog: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN_FOLDER, defaultPath),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

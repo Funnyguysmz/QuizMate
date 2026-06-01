@@ -1,9 +1,18 @@
 import { getDatabase } from './database';
-import { readMarkdownContent } from './file-scanner';
+import { collectMarkdownFiles, readMarkdownContent } from './file-scanner';
 import { loadSettings } from './settings-store';
-import type { QuizGenerateInput, QuizSessionWithQuestions } from '../../shared/types';
+import type {
+  GenerateStudyMaterialsInput,
+  GenerateStudyTodosInput,
+  GeneratedStudyMaterialsResult,
+  QuizGenerateInput,
+  QuizSessionWithQuestions,
+  StudyPlan,
+} from '../../shared/types';
 import * as https from 'https';
 import * as http from 'http';
+import fs from 'fs';
+import path from 'path';
 
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 
@@ -62,6 +71,38 @@ function apiRequest(body: any, apiKey: string): Promise<any> {
     return requestViaProxy(proxyUrl, url, payload, apiKey);
   }
   return requestDirect(url, payload, apiKey);
+}
+
+function stripJsonFence(content: string): string {
+  let jsonStr = content.trim();
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
+  }
+  return jsonStr;
+}
+
+function parsePlanRow(row: any): StudyPlan {
+  return {
+    ...row,
+    tags: JSON.parse(row.tags || '[]'),
+    source_files: JSON.parse(row.source_files || '[]'),
+  };
+}
+
+function getApiKeyOrThrow(): string {
+  const settings = loadSettings();
+  if (!settings.apiKey) {
+    throw new Error('NO_API_KEY');
+  }
+  return settings.apiKey;
+}
+
+function buildSourceMaterial(files: string[], maxPerFile = 3500): string {
+  return files.map((filePath) => {
+    const name = filePath.split('/').pop() || filePath;
+    const content = readMarkdownContent(filePath);
+    return `## ${name}\nPath: ${filePath}\n\n${content.substring(0, maxPerFile)}`;
+  }).join('\n\n---\n\n');
 }
 
 function requestDirect(url: URL, payload: string, apiKey: string): Promise<any> {
@@ -166,10 +207,7 @@ function parseQuizResponse(data: any): any[] {
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('Empty response from DeepSeek');
 
-  let jsonStr = content.trim();
-  if (jsonStr.startsWith('```')) {
-    jsonStr = jsonStr.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
-  }
+  const jsonStr = stripJsonFence(content);
 
   try {
     const parsed = JSON.parse(jsonStr);
@@ -184,9 +222,7 @@ function parseQuizResponse(data: any): any[] {
 
 export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessionWithQuestions> {
   const settings = loadSettings();
-  if (!settings.apiKey) {
-    throw new Error('NO_API_KEY');
-  }
+  const apiKey = getApiKeyOrThrow();
 
   const { system, user } = buildPrompt(input.files, input.questionCount, input.topic);
 
@@ -199,7 +235,7 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
     stream: false,
   };
 
-  const response = await apiRequest(requestBody, settings.apiKey);
+  const response = await apiRequest(requestBody, apiKey);
   const questions = parseQuizResponse(response);
 
   const db = getDatabase();
@@ -233,4 +269,162 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
     source_files: JSON.parse(session.source_files),
     questions: dbQuestions.map(q => ({ ...q, options: JSON.parse(q.options) })),
   };
+}
+
+export async function generateStudyTodos(input: GenerateStudyTodosInput): Promise<StudyPlan[]> {
+  const settings = loadSettings();
+  const apiKey = getApiKeyOrThrow();
+  const sourceFiles = input.files?.length
+    ? input.files
+    : collectMarkdownFiles(settings.settings.study_materials_path, 18);
+  const sourceMaterial = buildSourceMaterial(sourceFiles, 2800);
+  const count = input.count || 8;
+
+  const system = `You are a senior Android interview mentor. Create a focused TODO study plan from local notes. Use the user's goal and source material. Prefer practical Android topics such as Kotlin coroutines, ViewModel, Jetpack, Flow/StateFlow, lifecycle, Compose, architecture, threading, performance, and testing when relevant.
+
+Return ONLY valid JSON:
+{
+  "todos": [
+    {
+      "title": "short actionable learning item",
+      "category": "Android|Kotlin|Architecture|Interview|...",
+      "tags": ["tag1", "tag2"],
+      "priority": 0,
+      "notes": "why this matters and what to verify",
+      "sourceFiles": ["absolute source file path if used"]
+    }
+  ]
+}
+
+Rules:
+1. Generate exactly ${count} todos.
+2. Each todo must be actionable and suitable for later study material generation.
+3. priority is 0, 1, or 2.
+4. Use absolute source paths only from the provided material paths.`;
+
+  const user = `GOAL:\n${input.goal}\n\nFOCUS:\n${input.focus || 'Android developer interview preparation'}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No local documents were found. Generate a sensible Android study plan and mark sourceFiles as [].'}`;
+
+  const response = await apiRequest({
+    model: settings.settings.quiz_model || 'deepseek-v4-flash',
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    stream: false,
+  }, apiKey);
+
+  const content = response.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Empty response from DeepSeek');
+
+  const parsed = JSON.parse(stripJsonFence(content));
+  if (!Array.isArray(parsed.todos)) {
+    throw new Error('Response missing "todos" array');
+  }
+
+  const db = getDatabase();
+  const insert = db.prepare(
+    `INSERT INTO study_plans (title, category, tags, status, priority, notes, source_file, source_files, ai_generated)
+     VALUES (@title, @category, @tags, 'pending', @priority, @notes, @source_file, @source_files, 1)`
+  );
+
+  const ids: number[] = [];
+  const transaction = db.transaction(() => {
+    for (const todo of parsed.todos) {
+      const todoSourceFiles = Array.isArray(todo.sourceFiles) ? todo.sourceFiles : [];
+      const result = insert.run({
+        title: String(todo.title || '').trim() || '未命名学习项目',
+        category: todo.category || 'Android',
+        tags: JSON.stringify(Array.isArray(todo.tags) ? todo.tags : []),
+        priority: Number.isInteger(todo.priority) ? todo.priority : 1,
+        notes: todo.notes || null,
+        source_file: todoSourceFiles[0] || null,
+        source_files: JSON.stringify(todoSourceFiles),
+      });
+      ids.push(result.lastInsertRowid as number);
+    }
+  });
+  transaction();
+
+  return db.prepare(`SELECT * FROM study_plans WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY priority DESC, id ASC`)
+    .all(...ids)
+    .map(parsePlanRow);
+}
+
+export async function generateStudyMaterials(input: GenerateStudyMaterialsInput): Promise<GeneratedStudyMaterialsResult> {
+  const settings = loadSettings();
+  const apiKey = getApiKeyOrThrow();
+  const db = getDatabase();
+
+  if (input.planIds.length === 0) {
+    throw new Error('No plans selected');
+  }
+
+  const plans = db.prepare(`SELECT * FROM study_plans WHERE id IN (${input.planIds.map(() => '?').join(',')}) ORDER BY priority DESC, id ASC`)
+    .all(...input.planIds)
+    .map(parsePlanRow);
+
+  if (plans.length === 0) {
+    throw new Error('No plans selected');
+  }
+
+  const files = Array.from(new Set(plans.flatMap((plan) => plan.source_files.length ? plan.source_files : plan.source_file ? [plan.source_file] : [])));
+  const sourceMaterial = buildSourceMaterial(files, 4500);
+  const planSummary = plans.map((plan, index) => `${index + 1}. ${plan.title}\nCategory: ${plan.category || '未分类'}\nTags: ${plan.tags.join(', ')}\nNotes: ${plan.notes || ''}`).join('\n\n');
+
+  const system = `You are a rigorous Android learning-material author. Generate accurate Markdown study notes for each selected TODO. Ground claims in the provided local material when available, and clearly mark general best-practice content when it is inferred.
+
+Return ONLY valid JSON:
+{
+  "materials": [
+    {
+      "planId": 1,
+      "markdown": "# Title\\n..."
+    }
+  ]
+}
+
+Each markdown document must include: learning objective, key concepts, Android/Kotlin examples when useful, common interview traps, checklist, and references to source filenames.`;
+
+  const response = await apiRequest({
+    model: settings.settings.quiz_model || 'deepseek-v4-flash',
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: `AUDIENCE:\n${input.audience || 'Android developer preparing for interviews'}\n\nTODO PLAN:\n${planSummary}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No source files were attached.'}` },
+    ],
+    stream: false,
+  }, apiKey);
+
+  const content = response.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Empty response from DeepSeek');
+
+  const parsed = JSON.parse(stripJsonFence(content));
+  if (!Array.isArray(parsed.materials)) {
+    throw new Error('Response missing "materials" array');
+  }
+
+  const outputDirectory = path.join(settings.settings.study_materials_path, 'QuizMate生成学习资料');
+  fs.mkdirSync(outputDirectory, { recursive: true });
+
+  const update = db.prepare(
+    `UPDATE study_plans
+     SET generated_material = @generated_material, material_file = @material_file, status = 'in_progress', updated_at = datetime('now')
+     WHERE id = @id`
+  );
+
+  for (const material of parsed.materials) {
+    const plan = plans.find((item) => item.id === Number(material.planId));
+    if (!plan) continue;
+
+    const markdown = String(material.markdown || '').trim();
+    const safeTitle = plan.title.replace(/[\\/:*?"<>|]/g, '-').slice(0, 80);
+    const filePath = path.join(outputDirectory, `${String(plan.id).padStart(3, '0')}-${safeTitle}.md`);
+    fs.writeFileSync(filePath, markdown, 'utf-8');
+    update.run({ id: plan.id, generated_material: markdown, material_file: filePath });
+  }
+
+  const updatedPlans = db.prepare(`SELECT * FROM study_plans WHERE id IN (${input.planIds.map(() => '?').join(',')}) ORDER BY priority DESC, id ASC`)
+    .all(...input.planIds)
+    .map(parsePlanRow);
+
+  return { plans: updatedPlans, outputDirectory };
 }

@@ -14,6 +14,8 @@ export const IPC_CHANNELS = {
   PLANS_DELETE: 'plans:delete',
   PLANS_LIST: 'plans:list',
   PLANS_GET: 'plans:get',
+  PLANS_GENERATE_TODOS: 'plans:generate-todos',
+  PLANS_GENERATE_MATERIALS: 'plans:generate-materials',
 
   // Quiz
   QUIZ_GENERATE: 'quiz:generate',
@@ -67,6 +69,10 @@ export interface StudyPlan {
   priority: number;
   notes: string | null;
   source_file: string | null;
+  source_files: string[];
+  generated_material: string | null;
+  material_file: string | null;
+  ai_generated: number;
   created_at: string;
   updated_at: string;
 }
@@ -79,6 +85,10 @@ export interface CreatePlanInput {
   priority?: number;
   notes?: string;
   source_file?: string;
+  source_files?: string[];
+  generated_material?: string;
+  material_file?: string;
+  ai_generated?: number;
 }
 
 export interface UpdatePlanInput {
@@ -88,6 +98,11 @@ export interface UpdatePlanInput {
   status?: 'pending' | 'in_progress' | 'done';
   priority?: number;
   notes?: string;
+  source_file?: string;
+  source_files?: string[];
+  generated_material?: string;
+  material_file?: string;
+  ai_generated?: number;
 }
 
 export interface PlanFilters {
@@ -129,6 +144,23 @@ export interface QuizGenerateInput {
   files: string[];
   questionCount: number;
   topic?: string;
+}
+
+export interface GenerateStudyTodosInput {
+  goal: string;
+  focus?: string;
+  files?: string[];
+  count?: number;
+}
+
+export interface GenerateStudyMaterialsInput {
+  planIds: number[];
+  audience?: string;
+}
+
+export interface GeneratedStudyMaterialsResult {
+  plans: StudyPlan[];
+  outputDirectory: string;
 }
 
 export interface WrongAnswer {

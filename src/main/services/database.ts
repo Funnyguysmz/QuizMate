@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS study_plans (
     priority        INTEGER NOT NULL DEFAULT 0,
     notes           TEXT,
     source_file     TEXT,
+    source_files    TEXT NOT NULL DEFAULT '[]',
+    generated_material TEXT,
+    material_file   TEXT,
+    ai_generated    INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -83,6 +87,7 @@ export function initDatabase(): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  migrateDatabase(db);
 }
 
 export function getDatabase(): Database.Database {
@@ -90,4 +95,21 @@ export function getDatabase(): Database.Database {
     throw new Error('Database not initialized. Call initDatabase() first.');
   }
   return db;
+}
+
+function migrateDatabase(database: Database.Database): void {
+  const columns = database.prepare('PRAGMA table_info(study_plans)').all() as Array<{ name: string }>;
+  const columnNames = new Set(columns.map((column) => column.name));
+  const migrations = [
+    { name: 'source_files', sql: "ALTER TABLE study_plans ADD COLUMN source_files TEXT NOT NULL DEFAULT '[]'" },
+    { name: 'generated_material', sql: 'ALTER TABLE study_plans ADD COLUMN generated_material TEXT' },
+    { name: 'material_file', sql: 'ALTER TABLE study_plans ADD COLUMN material_file TEXT' },
+    { name: 'ai_generated', sql: 'ALTER TABLE study_plans ADD COLUMN ai_generated INTEGER NOT NULL DEFAULT 0' },
+  ];
+
+  for (const migration of migrations) {
+    if (!columnNames.has(migration.name)) {
+      database.exec(migration.sql);
+    }
+  }
 }

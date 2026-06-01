@@ -1,7 +1,7 @@
 import path from 'path';
 import { app } from 'electron';
 import fs from 'fs';
-import type { AppSettings } from '../../shared/types';
+import type { AppSettings, CandidateProfile } from '../../shared/types';
 
 const defaultSettings: AppSettings = {
   study_materials_path: getDefaultStudyMaterialsPath(),
@@ -13,6 +13,7 @@ const defaultSettings: AppSettings = {
 interface SettingsData {
   settings: AppSettings;
   apiKey?: string;
+  candidateProfile?: CandidateProfile;
   windowBounds?: { x?: number; y?: number; width: number; height: number };
 }
 
@@ -93,4 +94,40 @@ export function saveWindowBounds(bounds: { x?: number; y?: number; width: number
   } catch {
     // Ignore write errors on quit
   }
+}
+
+export function loadCandidateProfile(): CandidateProfile {
+  const data = loadSettings();
+  return data.candidateProfile || {
+    resume_file_path: null,
+    resume_text: null,
+    job_context: '',
+    updated_at: null,
+  };
+}
+
+export function saveCandidateProfile(profile: Partial<CandidateProfile>): CandidateProfile {
+  const data = loadSettings();
+  const current = data.candidateProfile || {
+    resume_file_path: null,
+    resume_text: null,
+    job_context: '',
+    updated_at: null,
+  };
+  const merged: CandidateProfile = {
+    ...current,
+    ...profile,
+    updated_at: new Date().toISOString(),
+  };
+  data.candidateProfile = merged;
+  cache = data;
+  writeSettingsFile(data);
+  return merged;
+}
+
+export function clearCandidateProfile(): void {
+  const data = loadSettings();
+  delete data.candidateProfile;
+  cache = data;
+  writeSettingsFile(data);
 }

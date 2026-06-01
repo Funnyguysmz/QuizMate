@@ -17,6 +17,8 @@ import type {
   WrongAnswerFilters,
   WrongAnswerStats,
   AppSettings,
+  CandidateProfile,
+  ImportResumeResult,
 } from '../shared/types';
 
 const electronAPI = {
@@ -100,6 +102,19 @@ const electronAPI = {
 
   deleteApiKey: (): Promise<void> =>
     ipcRenderer.invoke(IPC_CHANNELS.API_KEY_DELETE),
+
+  // Candidate Profile
+  getCandidateProfile: (): Promise<CandidateProfile> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PROFILE_GET),
+
+  updateCandidateProfile: (profile: Partial<CandidateProfile>): Promise<CandidateProfile> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PROFILE_UPDATE, profile),
+
+  clearCandidateProfile: (): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PROFILE_CLEAR),
+
+  importResumePdf: (): Promise<ImportResumeResult | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.PROFILE_IMPORT_RESUME),
 
   // Dialog
   openFolderDialog: (defaultPath?: string): Promise<string | null> =>

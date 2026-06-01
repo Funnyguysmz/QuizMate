@@ -15,8 +15,8 @@ export function StudyPlanPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState('');
-  const [goal, setGoal] = useState('Android 面试系统复习：协程、ViewModel、Jetpack、StateFlow、架构与性能');
-  const [focus, setFocus] = useState('Android 开发工程师，偏中高级面试');
+  const [goal, setGoal] = useState('系统复习技术面试高频考点');
+  const [focus, setFocus] = useState('软件开发工程师，偏中高级面试');
   const [todoCount, setTodoCount] = useState(8);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
@@ -50,6 +50,15 @@ export function StudyPlanPage() {
       ]);
       setSettings(loadedSettings);
       setApiKey(loadedApiKey);
+      // 加载简历/求职背景信息，用于通知用户
+      try {
+        const p = await window.electronAPI.getCandidateProfile();
+        if (!p.resume_text && !p.job_context) {
+          setNotice('建议先在设置中导入简历并填写求职背景，生成结果会更准确。');
+        }
+      } catch {
+        // profile 加载失败不影响主流程
+      }
       await loadPlans();
     } catch (e) {
       setError(formatError(e));

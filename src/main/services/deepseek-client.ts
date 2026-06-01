@@ -274,23 +274,25 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
 export async function generateStudyTodos(input: GenerateStudyTodosInput): Promise<StudyPlan[]> {
   const settings = loadSettings();
   const apiKey = getApiKeyOrThrow();
+  const { loadCandidateProfile } = await import('./settings-store');
+  const profile = loadCandidateProfile();
   const sourceFiles = input.files?.length
     ? input.files
     : collectMarkdownFiles(settings.settings.study_materials_path, 18);
   const sourceMaterial = buildSourceMaterial(sourceFiles, 2800);
   const count = input.count || 8;
 
-  const system = `You are a senior Android interview mentor. Create a focused TODO study plan from local notes. Use the user's goal and source material. Prefer practical Android topics such as Kotlin coroutines, ViewModel, Jetpack, Flow/StateFlow, lifecycle, Compose, architecture, threading, performance, and testing when relevant.
+  const system = `You are a senior technical interview coach. Create a personalized TODO study plan based on the candidate's resume, job background, and local source materials. Adapt your recommendations to the candidate's actual tech stack and target roles — do not assume a specific platform or language unless the profile clearly indicates it.
 
 Return ONLY valid JSON:
 {
   "todos": [
     {
       "title": "short actionable learning item",
-      "category": "Android|Kotlin|Architecture|Interview|...",
+      "category": "relevant tech category based on profile",
       "tags": ["tag1", "tag2"],
       "priority": 0,
-      "notes": "why this matters and what to verify",
+      "notes": "why this matters, how it relates to the candidate's background, and what to verify as learning outcome",
       "sourceFiles": ["absolute source file path if used"]
     }
   ]
@@ -298,11 +300,22 @@ Return ONLY valid JSON:
 
 Rules:
 1. Generate exactly ${count} todos.
-2. Each todo must be actionable and suitable for later study material generation.
-3. priority is 0, 1, or 2.
-4. Use absolute source paths only from the provided material paths.`;
+2. Each todo must be actionable for interview preparation.
+3. priority: 0 (critical/must-know), 1 (important), 2 (nice-to-have). Assign higher priority to topics that appear in the resume but may need strengthening, or topics frequently asked for the target role.
+4. Use absolute source paths only from the provided material paths.
+5. If the profile reveals specific technologies (e.g., Android, Kotlin, Jetpack, React, Python, etc.), naturally focus on those. If no specific stack is detected, generate a balanced plan covering fundamentals and the stated goal/focus.
+6. Each notes field should explain: why this topic matters for THIS candidate, how it connects to their resume or job context, and what the learning checkpoint should be.`;
 
-  const user = `GOAL:\n${input.goal}\n\nFOCUS:\n${input.focus || 'Android developer interview preparation'}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No local documents were found. Generate a sensible Android study plan and mark sourceFiles as [].'}`;
+  let profileSection = '';
+  if (profile.resume_text) {
+    const resumeExcerpt = profile.resume_text.slice(0, 2000);
+    profileSection += `\n\nCANDIDATE RESUME:\n${resumeExcerpt}`;
+  }
+  if (profile.job_context) {
+    profileSection += `\n\nJOB SEARCH CONTEXT:\n${profile.job_context}`;
+  }
+
+  const user = `GOAL:\n${input.goal}\n\nFOCUS:\n${input.focus || 'Technical interview preparation'}\n${profileSection}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No local documents were found. Generate a sensible study plan based on the candidate profile and mark sourceFiles as [].'}`;
 
   const response = await apiRequest({
     model: settings.settings.quiz_model || 'deepseek-v4-flash',
@@ -333,7 +346,7 @@ Rules:
       const todoSourceFiles = Array.isArray(todo.sourceFiles) ? todo.sourceFiles : [];
       const result = insert.run({
         title: String(todo.title || '').trim() || '未命名学习项目',
-        category: todo.category || 'Android',
+        category: todo.category || 'General',
         tags: JSON.stringify(Array.isArray(todo.tags) ? todo.tags : []),
         priority: Number.isInteger(todo.priority) ? todo.priority : 1,
         notes: todo.notes || null,
@@ -353,6 +366,8 @@ Rules:
 export async function generateStudyMaterials(input: GenerateStudyMaterialsInput): Promise<GeneratedStudyMaterialsResult> {
   const settings = loadSettings();
   const apiKey = getApiKeyOrThrow();
+  const { loadCandidateProfile } = await import('./settings-store');
+  const profile = loadCandidateProfile();
   const db = getDatabase();
 
   if (input.planIds.length === 0) {
@@ -371,7 +386,7 @@ export async function generateStudyMaterials(input: GenerateStudyMaterialsInput)
   const sourceMaterial = buildSourceMaterial(files, 4500);
   const planSummary = plans.map((plan, index) => `${index + 1}. ${plan.title}\nCategory: ${plan.category || '未分类'}\nTags: ${plan.tags.join(', ')}\nNotes: ${plan.notes || ''}`).join('\n\n');
 
-  const system = `You are a rigorous Android learning-material author. Generate accurate Markdown study notes for each selected TODO. Ground claims in the provided local material when available, and clearly mark general best-practice content when it is inferred.
+  const system = `You are a rigorous technical learning-material author. Generate accurate Markdown study notes for each selected TODO. Ground claims in the provided local material when available, and clearly mark general best-practice content when it is inferred. Tailor examples and depth to the candidate's background.
 
 Return ONLY valid JSON:
 {
@@ -383,13 +398,21 @@ Return ONLY valid JSON:
   ]
 }
 
-Each markdown document must include: learning objective, key concepts, Android/Kotlin examples when useful, common interview traps, checklist, and references to source filenames.`;
+Each markdown document must include: learning objective, key concepts, practical code examples relevant to the candidate's tech stack, common interview traps, checklist, and references to source filenames.`;
+
+  let audienceContext = input.audience || 'developer preparing for technical interviews';
+  if (profile.job_context) {
+    audienceContext = `${audienceContext}\nCandidate job context: ${profile.job_context}`;
+  }
+  if (profile.resume_text) {
+    audienceContext = `${audienceContext}\nCandidate resume summary: ${profile.resume_text.slice(0, 800)}`;
+  }
 
   const response = await apiRequest({
     model: settings.settings.quiz_model || 'deepseek-v4-flash',
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: `AUDIENCE:\n${input.audience || 'Android developer preparing for interviews'}\n\nTODO PLAN:\n${planSummary}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No source files were attached.'}` },
+      { role: 'user', content: `AUDIENCE:\n${audienceContext}\n\nTODO PLAN:\n${planSummary}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No source files were attached.'}` },
     ],
     stream: false,
   }, apiKey);

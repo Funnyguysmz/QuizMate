@@ -17,6 +17,7 @@
     "better-sqlite3": "^11.7.0",
     "clsx": "^2.1.1",
     "electron-store": "^8.2.0",
+    "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.3",
@@ -53,11 +54,16 @@
     "mac": {
       "category": "public.app-category.education",
       "icon": "resources/icon.icns",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
       "icon": "resources/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "nsis": {
       "oneClick": false,

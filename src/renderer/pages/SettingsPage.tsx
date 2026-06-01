@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '../components/shared/Button';
-import type { AppSettings } from '../../shared/types';
+import type { AppSettings, CandidateProfile } from '../../shared/types';
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -8,6 +8,8 @@ export function SettingsPage() {
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [profile, setProfile] = useState<CandidateProfile | null>(null);
+  const [profileMessage, setProfileMessage] = useState('');
 
   useEffect(() => {
     loadSettings();
@@ -18,6 +20,8 @@ export function SettingsPage() {
     setSettings(s);
     const key = await window.electronAPI.getApiKey();
     if (key) setApiKey(key);
+    const p = await window.electronAPI.getCandidateProfile();
+    setProfile(p);
   }
 
   async function handleSave() {
@@ -30,6 +34,11 @@ export function SettingsPage() {
         await window.electronAPI.setApiKey(apiKey);
       } else {
         await window.electronAPI.deleteApiKey();
+      }
+      if (profile) {
+        await window.electronAPI.updateCandidateProfile({
+          job_context: profile.job_context,
+        });
       }
       setMessage('保存成功');
       setTimeout(() => setMessage(''), 3000);
@@ -55,6 +64,30 @@ export function SettingsPage() {
         setTimeout(() => setMessage(''), 3000);
       }
     }
+  }
+
+  async function handleImportResume() {
+    try {
+      const result = await window.electronAPI.importResumePdf();
+      if (!result) return;
+      const updated = await window.electronAPI.updateCandidateProfile({
+        resume_file_path: result.filePath,
+        resume_text: result.text,
+      });
+      setProfile(updated);
+      setProfileMessage('简历已导入并保存');
+      setTimeout(() => setProfileMessage(''), 3000);
+    } catch (e) {
+      setProfileMessage('简历导入失败：' + (e instanceof Error ? e.message : String(e)));
+      setTimeout(() => setProfileMessage(''), 5000);
+    }
+  }
+
+  async function handleClearProfile() {
+    await window.electronAPI.clearCandidateProfile();
+    setProfile(null);
+    setProfileMessage('画像已清空');
+    setTimeout(() => setProfileMessage(''), 3000);
   }
 
   if (!settings) return null;
@@ -155,6 +188,76 @@ export function SettingsPage() {
               }`}
             />
           </button>
+        </div>
+      </div>
+
+      {/* Candidate Profile */}
+      <div className="border-t border-gray-200 dark:border-gray-800 pt-6">
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4">
+          候选人画像
+        </h3>
+
+        {/* 简历文件路径展示 + 导入按钮 */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+            简历
+          </label>
+          {profile?.resume_file_path ? (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                {profile.resume_file_path}
+              </p>
+              {profile.resume_text && (
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 p-3">
+                  <p className="text-xs text-gray-400 mb-1">解析摘要（前500字）</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-300 whitespace-pre-wrap line-clamp-[12]">
+                    {profile.resume_text.slice(0, 500)}
+                    {profile.resume_text.length > 500 && '...'}
+                  </p>
+                </div>
+              )}
+              {profile.updated_at && (
+                <p className="text-xs text-gray-400">
+                  最后更新：{new Date(profile.updated_at).toLocaleString('zh-CN')}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400 mb-2">尚未导入简历</p>
+          )}
+          <div className="flex gap-2 mt-2">
+            <Button variant="secondary" onClick={handleImportResume}>
+              导入 PDF 简历
+            </Button>
+            {profile?.resume_file_path && (
+              <Button variant="secondary" onClick={handleClearProfile}>
+                清空画像
+              </Button>
+            )}
+          </div>
+          {profileMessage && (
+            <p className={`mt-2 text-xs ${profileMessage.includes('失败') ? 'text-red-600' : 'text-green-600'}`}>
+              {profileMessage}
+            </p>
+          )}
+        </div>
+
+        {/* 求职背景 textarea */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+            求职背景
+          </label>
+          <textarea
+            value={profile?.job_context || ''}
+            onChange={(e) => setProfile(prev => prev
+              ? { ...prev, job_context: e.target.value }
+              : { resume_file_path: null, resume_text: null, job_context: e.target.value, updated_at: null }
+            )}
+            placeholder="例如：目标岗位、工作年限、期望方向、公司偏好..."
+            rows={3}
+            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-y"
+          />
+          <p className="mt-1 text-xs text-gray-400">求职背景会帮助 AI 生成更个性化的学习计划</p>
         </div>
       </div>
 

@@ -30,6 +30,12 @@ export const IPC_CHANNELS = {
   WRONG_ANSWERS_RESOLVE: 'wrong-answers:resolve',
   WRONG_ANSWERS_STATS: 'wrong-answers:stats',
 
+  // Candidate Profile
+  PROFILE_GET: 'profile:get',
+  PROFILE_UPDATE: 'profile:update',
+  PROFILE_CLEAR: 'profile:clear',
+  PROFILE_IMPORT_RESUME: 'profile:import-resume',
+
   // Settings
   SETTINGS_GET: 'settings:get',
   SETTINGS_UPDATE: 'settings:update',
@@ -191,6 +197,18 @@ export interface WrongAnswerStats {
   unresolved: number;
   resolved: number;
   byCategory: { category: string; count: number }[];
+}
+
+export interface CandidateProfile {
+  resume_file_path: string | null;
+  resume_text: string | null;
+  job_context: string;
+  updated_at: string | null;
+}
+
+export interface ImportResumeResult {
+  filePath: string;
+  text: string;
 }
 
 export interface AppSettings {

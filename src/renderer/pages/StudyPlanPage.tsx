@@ -29,12 +29,12 @@ export function StudyPlanPage() {
   const [profileStatus, setProfileStatus] = useState<{
     hasResume: boolean;
     hasJobContext: boolean;
-    resumePreview: string;
+    resumeLabel: string;
     jobContextPreview: string;
   }>({
     hasResume: false,
     hasJobContext: false,
-    resumePreview: '',
+    resumeLabel: '',
     jobContextPreview: '',
   });
 
@@ -84,7 +84,7 @@ export function StudyPlanPage() {
         setProfileStatus({
           hasResume: !!p.resume_text,
           hasJobContext: !!p.job_context,
-          resumePreview: p.resume_text ? p.resume_text.slice(0, 80) : '',
+          resumeLabel: buildResumeLabel(p.resume_file_path, p.updated_at),
           jobContextPreview: p.job_context ? p.job_context.slice(0, 60) : '',
         });
         if (!p.resume_text && !p.job_context) {
@@ -105,7 +105,15 @@ export function StudyPlanPage() {
     try {
       const data = await window.electronAPI.getPlans(filters);
       setPlans(data);
-      setActivePlan((current) => current ? data.find((plan) => plan.id === current.id) || current : null);
+      setActivePlan((current) => {
+        if (!current) return null;
+        const refreshed = data.find((plan) => plan.id === current.id);
+        if (!refreshed) return current;
+        return {
+          ...refreshed,
+          generated_material: refreshed.generated_material || current.generated_material,
+        };
+      });
     } catch (e) {
       setError(formatError(e));
     }
@@ -206,8 +214,23 @@ export function StudyPlanPage() {
     setShowForm(true);
   }
 
-  function handleStudy(plan: StudyPlan) {
-    setActivePlan(plan);
+  async function handleStudy(plan: StudyPlan) {
+    setError(null);
+
+    let planForReading = plan;
+    if (!plan.generated_material && plan.material_file) {
+      try {
+        const content = await window.electronAPI.readMarkdownFile(plan.material_file);
+        planForReading = {
+          ...plan,
+          generated_material: content,
+        };
+      } catch (e) {
+        setError(`读取学习资料失败：${formatError(e)}`);
+      }
+    }
+
+    setActivePlan(planForReading);
     if (plan.status === 'pending') {
       window.electronAPI.updatePlan(plan.id, { status: 'in_progress' }).then(loadPlans).catch(() => undefined);
     }
@@ -266,7 +289,7 @@ export function StudyPlanPage() {
                     <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
-                    <span className="truncate">已导入简历：{profileStatus.resumePreview}...</span>
+                    <span className="truncate">已导入简历：{profileStatus.resumeLabel}</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
@@ -499,6 +522,15 @@ function formatError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('NO_API_KEY')) return '请先填写 DeepSeek API Key。';
   return message;
+}
+
+function buildResumeLabel(filePath: string | null, updatedAt: string | null): string {
+  const fileName = filePath ? filePath.split(/[\\/]/).pop() || filePath : '已保存简历文本';
+  if (!updatedAt) return fileName;
+
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return fileName;
+  return `${fileName} · ${date.toLocaleString()}`;
 }
 
 function PlanIcon() {

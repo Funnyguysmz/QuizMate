@@ -19,6 +19,23 @@ import type {
   AppSettings,
   CandidateProfile,
   ImportResumeResult,
+  AgentRun,
+  AgentRunWithSteps,
+  AgentStep,
+  CreateAgentRunInput,
+  UpdateAgentRunInput,
+  CreateAgentStepInput,
+  UpdateAgentStepInput,
+  InterviewRecord,
+  InterviewRecordWithQuestions,
+  InterviewQuestion,
+  CreateInterviewInput,
+  UpdateInterviewInput,
+  InterviewFilters,
+  CreateInterviewQuestionInput,
+  UpdateInterviewQuestionInput,
+  ImportInterviewInput,
+  ImportInterviewResult,
 } from '../shared/types';
 
 const electronAPI = {
@@ -119,6 +136,53 @@ const electronAPI = {
   // Dialog
   openFolderDialog: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC_CHANNELS.DIALOG_OPEN_FOLDER, defaultPath),
+
+  // Agent Runs
+  createAgentRun: (input: CreateAgentRunInput): Promise<AgentRun> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_RUNS_CREATE, input),
+
+  updateAgentRun: (id: number, input: UpdateAgentRunInput): Promise<AgentRun> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_RUNS_UPDATE, id, input),
+
+  getAgentRun: (id: number): Promise<AgentRunWithSteps | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_RUNS_GET, id),
+
+  listAgentRuns: (type?: string): Promise<AgentRun[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_RUNS_LIST, type),
+
+  createAgentStep: (input: CreateAgentStepInput): Promise<AgentStep> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_STEPS_CREATE, input),
+
+  updateAgentStep: (id: number, input: UpdateAgentStepInput): Promise<AgentStep> =>
+    ipcRenderer.invoke(IPC_CHANNELS.AGENT_STEPS_UPDATE, id, input),
+
+  // Interview Database
+  createInterview: (input: CreateInterviewInput): Promise<InterviewRecord> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_CREATE, input),
+
+  updateInterview: (id: number, input: UpdateInterviewInput): Promise<InterviewRecord> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_UPDATE, id, input),
+
+  getInterview: (id: number): Promise<InterviewRecordWithQuestions | null> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_GET, id),
+
+  listInterviews: (filters?: InterviewFilters): Promise<InterviewRecord[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_LIST, filters),
+
+  deleteInterview: (id: number): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_DELETE, id),
+
+  createInterviewQuestion: (input: CreateInterviewQuestionInput): Promise<InterviewQuestion> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEW_QUESTIONS_CREATE, input),
+
+  updateInterviewQuestion: (id: number, input: UpdateInterviewQuestionInput): Promise<InterviewQuestion> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEW_QUESTIONS_UPDATE, id, input),
+
+  deleteInterviewQuestion: (id: number): Promise<void> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEW_QUESTIONS_DELETE, id),
+
+  importInterviewFromFile: (input: ImportInterviewInput): Promise<ImportInterviewResult> =>
+    ipcRenderer.invoke(IPC_CHANNELS.INTERVIEWS_IMPORT_FROM_FILE, input),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

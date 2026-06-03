@@ -79,6 +79,68 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value           TEXT NOT NULL,
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    type            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    title           TEXT NOT NULL,
+    input_summary   TEXT,
+    output_summary  TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(type);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+
+CREATE TABLE IF NOT EXISTS agent_steps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          INTEGER NOT NULL,
+    name            TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    order_index     INTEGER NOT NULL DEFAULT 0,
+    input           TEXT,
+    output          TEXT,
+    error           TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at    TEXT,
+    FOREIGN KEY (run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_steps_run_id ON agent_steps(run_id);
+
+CREATE TABLE IF NOT EXISTS interview_records (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    company         TEXT NOT NULL,
+    team            TEXT,
+    round           TEXT,
+    date            TEXT,
+    result          TEXT NOT NULL DEFAULT 'unknown',
+    source_file     TEXT,
+    interviewer_focus TEXT,
+    observations    TEXT,
+    raw_notes       TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_records_company ON interview_records(company);
+CREATE INDEX IF NOT EXISTS idx_interview_records_result ON interview_records(result);
+
+CREATE TABLE IF NOT EXISTS interview_questions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    interview_id    INTEGER NOT NULL,
+    question_text   TEXT NOT NULL,
+    topic           TEXT,
+    follow_up_questions TEXT,
+    answer_quality  TEXT NOT NULL DEFAULT 'unknown',
+    weakness_tags   TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (interview_id) REFERENCES interview_records(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_questions_interview_id ON interview_questions(interview_id);
 `;
 
 export function initDatabase(): void {

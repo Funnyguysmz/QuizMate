@@ -5,6 +5,8 @@ import type {
   GenerateStudyMaterialsInput,
   GenerateStudyTodosInput,
   GeneratedStudyMaterialsResult,
+  ImportInterviewInput,
+  ImportInterviewResult,
   QuizGenerateInput,
   QuizSessionWithQuestions,
   StudyPlan,
@@ -18,26 +20,32 @@ const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 
 function buildPrompt(files: string[], questionCount: number, topic?: string): { system: string; user: string } {
   const focusInstruction = topic
-    ? `Focus the questions on the topic of "${topic}". `
-    : 'Cover different topics from the source material. ';
+    ? `题目应重点围绕"${topic}"展开。`
+    : '题目应覆盖资料中的不同主题。';
 
-  const system = `You are an expert technical interviewer creating multiple-choice quiz questions for a senior software engineer preparing for interviews. Your questions should test deep understanding, not surface-level memorization.
+  const system = `你是一名资深技术面试官，负责为准备面试的高级软件工程师生成多选题。题目应考查深层理解，而非表面记忆。
 
-RULES:
-1. Generate exactly ${questionCount} questions based on the provided source material.
-2. Each question must have exactly 4 options (A, B, C, D).
-3. The correct answer must be unambiguous and verifiable from the source.
-4. Options should be plausible -- include common misconceptions as distractors.
+规则：
+1. 基于提供的资料精确生成 ${questionCount} 道题。
+2. 每题必须包含 4 个选项（A, B, C, D），选项前缀保持英文字母大写。
+3. 正确答案必须唯一且可在资料中验证。
+4. 干扰项应合理，包含常见的误解作为错误选项。
 5. ${focusInstruction}
-6. Include code snippets in questions when the source contains code.
-7. Each question must include a detailed explanation of why the answer is correct.
-8. Return ONLY valid JSON, no other text.
+6. 如果资料包含代码，应在题目中适当加入代码片段。
+7. 每题必须附带详细解释，说明正确答案的理由。
+8. 只输出有效 JSON，不要其他任何文本。
 
-The "correctAnswer" field must be exactly "A", "B", "C", or "D" -- never the full option text.
-The "options" array must contain exactly 4 strings, each starting with the letter followed by ") ".
-The "explanation" field should be 2-5 sentences with technical depth.
+语言要求：
+- 所有题目的题干（question）、选项文本（options）、解释（explanation）都必须使用**简体中文**输出。
+- 技术专有名词、API 名称、类名、框架名、代码片段保持英文原文，不要翻译。例如 RecyclerView、ViewModel、StateFlow、CoroutineScope、Kotlin、Jetpack Compose 等应保持原样。
+- JSON 字段名保持英文（question、options、correctAnswer、explanation），不要翻译成中文。
+- 选项前缀保持 "A) ", "B) ", "C) ", "D) " 格式，字母为大写英文。
 
-Return a JSON object:
+"correctAnswer" 字段的值必须恰好是 "A"、"B"、"C" 或 "D"——不能填写选项全文。
+"options" 数组必须恰好包含 4 个字符串，每个以大写字母 + ") " 开头。
+"explanation" 字段应包含 2-5 句有技术深度的解释。
+
+返回如下 JSON 对象：
 {
   "questions": [
     {
@@ -55,7 +63,7 @@ Return a JSON object:
     return `## ${name}\n\n${content.substring(0, 5000)}`;
   }).join('\n\n---\n\n');
 
-  const user = `SOURCE MATERIAL:\n${sources}\n\nGenerate ${questionCount} multiple-choice questions based on the above source material.`;
+  const user = `参考资料：\n${sources}\n\n请基于上述资料生成 ${questionCount} 道多选题。`;
 
   return { system, user };
 }
@@ -240,7 +248,7 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
 
   const db = getDatabase();
   const sourceFiles = input.files;
-  const title = `Quiz - ${new Date().toLocaleDateString('zh-CN')} (${questions.length} questions)`;
+  const title = `测验 - ${new Date().toLocaleDateString('zh-CN')}（${questions.length}题）`;
 
   const sessionResult = db.prepare(
     `INSERT INTO quiz_sessions (title, source_files, total_questions, status) VALUES (?, ?, ?, 'in_progress')`
@@ -282,40 +290,46 @@ export async function generateStudyTodos(input: GenerateStudyTodosInput): Promis
   const sourceMaterial = buildSourceMaterial(sourceFiles, 2800);
   const count = input.count || 8;
 
-  const system = `You are a senior technical interview coach. Create a personalized TODO study plan based on the candidate's resume, job background, and local source materials. Adapt your recommendations to the candidate's actual tech stack and target roles — do not assume a specific platform or language unless the profile clearly indicates it.
+  const system = `你是一名资深技术面试辅导教练。基于候选人的简历、求职背景和本地资料，为候选人制定个性化的 TODO 学习计划。根据候选人实际的技术栈和目标岗位调整建议——除非候选人信息明确指明，否则不要假设特定的平台或语言。
 
-Return ONLY valid JSON:
+只输出有效 JSON：
 {
   "todos": [
     {
-      "title": "short actionable learning item",
-      "category": "relevant tech category based on profile",
+      "title": "简短可执行的学习项目",
+      "category": "基于候选人背景的技术类别",
       "tags": ["tag1", "tag2"],
       "priority": 0,
-      "notes": "why this matters, how it relates to the candidate's background, and what to verify as learning outcome",
-      "sourceFiles": ["absolute source file path if used"]
+      "notes": "为什么这很重要、与候选人背景的关联、以及如何验证学习成果",
+      "sourceFiles": ["使用的资料绝对路径"]
     }
   ]
 }
 
-Rules:
-1. Generate exactly ${count} todos.
-2. Each todo must be actionable for interview preparation.
-3. priority: 0 (critical/must-know), 1 (important), 2 (nice-to-have). Assign higher priority to topics that appear in the resume but may need strengthening, or topics frequently asked for the target role.
-4. Use absolute source paths only from the provided material paths.
-5. If the profile reveals specific technologies (e.g., Android, Kotlin, Jetpack, React, Python, etc.), naturally focus on those. If no specific stack is detected, generate a balanced plan covering fundamentals and the stated goal/focus.
-6. Each notes field should explain: why this topic matters for THIS candidate, how it connects to their resume or job context, and what the learning checkpoint should be.`;
+语言要求：
+- todos.title、category、notes 字段必须使用**简体中文**。
+- tags 字段可以中英混用，但技术专有名词保持英文原文。
+- notes 字段需要用中文说明：为什么要学这个主题、它与候选人简历/求职背景的关联、以及如何验收学习成果。
+- JSON 字段名保持英文（title、category、tags、priority、notes、sourceFiles），不要翻译。
+
+规则：
+1. 精确生成 ${count} 个 TODO。
+2. 每个 TODO 必须对面试准备有实际可执行的价值。
+3. priority：0（关键/必须掌握）、1（重要）、2（锦上添花）。优先分配高优先级给简历中提及但可能需要加强的主题，或目标岗位高频考察的主题。
+4. 仅使用提供的资料路径中的绝对路径。
+5. 如果候选人信息显示了具体技术（如 Android、Kotlin、Jetpack、React、Python 等），应自然地聚焦这些技术。如未检测到特定技术栈，则生成覆盖基础知识和目标方向/重点的平衡计划。
+6. 每个 notes 字段应解释：为什么这个主题对**该候选人**重要、它与候选人简历/求职背景的关联、以及学习验收点是什么。`;
 
   let profileSection = '';
   if (profile.resume_text) {
     const resumeExcerpt = profile.resume_text.slice(0, 2000);
-    profileSection += `\n\nCANDIDATE RESUME:\n${resumeExcerpt}`;
+    profileSection += `\n\n候选人简历：\n${resumeExcerpt}`;
   }
   if (profile.job_context) {
-    profileSection += `\n\nJOB SEARCH CONTEXT:\n${profile.job_context}`;
+    profileSection += `\n\n求职背景：\n${profile.job_context}`;
   }
 
-  const user = `GOAL:\n${input.goal}\n\nFOCUS:\n${input.focus || 'Technical interview preparation'}\n${profileSection}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No local documents were found. Generate a sensible study plan based on the candidate profile and mark sourceFiles as [].'}`;
+  const user = `目标：\n${input.goal}\n\n重点：\n${input.focus || '技术面试准备'}\n${profileSection}\n\n本地参考资料：\n${sourceMaterial || '未找到本地文档。请根据候选人信息生成合理的学习计划，并将 sourceFiles 标记为 []。'}`;
 
   const response = await apiRequest({
     model: settings.settings.quiz_model || 'deepseek-v4-flash',
@@ -384,35 +398,42 @@ export async function generateStudyMaterials(input: GenerateStudyMaterialsInput)
 
   const files = Array.from(new Set(plans.flatMap((plan) => plan.source_files.length ? plan.source_files : plan.source_file ? [plan.source_file] : [])));
   const sourceMaterial = buildSourceMaterial(files, 4500);
-  const planSummary = plans.map((plan, index) => `${index + 1}. ${plan.title}\nCategory: ${plan.category || '未分类'}\nTags: ${plan.tags.join(', ')}\nNotes: ${plan.notes || ''}`).join('\n\n');
+  const planSummary = plans.map((plan, index) => `${index + 1}. ${plan.title}\n分类：${plan.category || '未分类'}\n标签：${plan.tags.join(', ')}\n备注：${plan.notes || ''}`).join('\n\n');
 
-  const system = `You are a rigorous technical learning-material author. Generate accurate Markdown study notes for each selected TODO. Ground claims in the provided local material when available, and clearly mark general best-practice content when it is inferred. Tailor examples and depth to the candidate's background.
+  const system = `你是一名严谨的技术学习资料作者。针对每个选中的 TODO 生成准确的 Markdown 学习笔记。有本地资料可用时，结论应有据可查；为通用最佳实践内容时需明确标注。根据候选人背景定制示例和讲解深度。
 
-Return ONLY valid JSON:
+只输出有效 JSON：
 {
   "materials": [
     {
       "planId": 1,
-      "markdown": "# Title\\n..."
+      "markdown": "# 标题\\n..."
     }
   ]
 }
 
-Each markdown document must include: learning objective, key concepts, practical code examples relevant to the candidate's tech stack, common interview traps, checklist, and references to source filenames.`;
+语言要求：
+- markdown 正文字段必须使用**简体中文**。
+- 技术名词、代码、API 名称、库名保持英文原文，不要翻译（如 RecyclerView、ViewModel、StateFlow、Kotlin、CoroutineScope 等）。
+- 章节标题（如 # 学习目标、## 核心概念等）使用中文。
+- 如果引用了英文源材料，应用中文解释其内容，不要大段照抄英文原文。
+- JSON 字段名保持英文（planId、markdown），不要翻译。
 
-  let audienceContext = input.audience || 'developer preparing for technical interviews';
+每个 markdown 文档必须包含：学习目标、核心概念、与候选人技术栈相关的实用代码示例、常见面试陷阱、检查清单、以及引用的源文件名。`;
+
+  let audienceContext = input.audience || '准备技术面试的开发者';
   if (profile.job_context) {
-    audienceContext = `${audienceContext}\nCandidate job context: ${profile.job_context}`;
+    audienceContext = `${audienceContext}\n候选人求职背景：${profile.job_context}`;
   }
   if (profile.resume_text) {
-    audienceContext = `${audienceContext}\nCandidate resume summary: ${profile.resume_text.slice(0, 800)}`;
+    audienceContext = `${audienceContext}\n候选人简历概要：${profile.resume_text.slice(0, 800)}`;
   }
 
   const response = await apiRequest({
     model: settings.settings.quiz_model || 'deepseek-v4-flash',
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: `AUDIENCE:\n${audienceContext}\n\nTODO PLAN:\n${planSummary}\n\nLOCAL SOURCE MATERIAL:\n${sourceMaterial || 'No source files were attached.'}` },
+      { role: 'user', content: `受众：\n${audienceContext}\n\nTODO 计划：\n${planSummary}\n\n本地参考资料：\n${sourceMaterial || '未附加源文件。'}` },
     ],
     stream: false,
   }, apiKey);
@@ -450,4 +471,273 @@ Each markdown document must include: learning objective, key concepts, practical
     .map(parsePlanRow);
 
   return { plans: updatedPlans, outputDirectory };
+}
+
+export async function importInterviewFromFile(input: ImportInterviewInput): Promise<ImportInterviewResult> {
+  const settings = loadSettings();
+  const apiKey = getApiKeyOrThrow();
+  const db = getDatabase();
+
+  // Step 0: Read file
+  if (!fs.existsSync(input.filePath)) {
+    throw new Error(`File not found: ${input.filePath}`);
+  }
+  const rawContent = fs.readFileSync(input.filePath, 'utf-8').trim();
+  if (!rawContent) {
+    throw new Error('File is empty');
+  }
+
+  // Truncate content to avoid excessive token usage (max ~8000 chars for the prompt)
+  const contentForPrompt = rawContent.length > 8000 ? rawContent.slice(0, 8000) + '\n\n[... 原文过长，已截断 ...]' : rawContent;
+
+  // Step 1: Create agent run
+  const fileName = input.filePath.split('/').pop() || input.filePath;
+  const runStmt = db.prepare(
+    `INSERT INTO agent_runs (type, status, title, input_summary)
+     VALUES (@type, 'running', @title, @input_summary)`
+  );
+  const runResult = runStmt.run({
+    type: 'interview_import',
+    title: `导入面试记录：${fileName}`,
+    input_summary: `文件: ${input.filePath}\n公司提示: ${input.companyHint || '无'}\n轮次提示: ${input.roundHint || '无'}\n结果提示: ${input.resultHint || 'unknown'}`,
+  });
+  const agentRunId = runResult.lastInsertRowid as number;
+
+  // Helper: create step
+  const createStep = (name: string, orderIndex: number, stepInput?: string): number => {
+    const stmt = db.prepare(
+      `INSERT INTO agent_steps (run_id, name, status, order_index, input)
+       VALUES (@run_id, @name, 'pending', @order_index, @input)`
+    );
+    const r = stmt.run({
+      run_id: agentRunId,
+      name,
+      order_index: orderIndex,
+      input: stepInput || null,
+    });
+    return r.lastInsertRowid as number;
+  };
+
+  // Helper: update step
+  const updateStep = (stepId: number, status: string, output?: string, error?: string) => {
+    const fields = ['status = @status'];
+    const values: Record<string, any> = { id: stepId, status };
+    if (output !== undefined) { fields.push('output = @output'); values.output = output; }
+    if (error !== undefined) { fields.push('error = @error'); values.error = error; }
+    if (status === 'completed') { fields.push("completed_at = datetime('now')"); }
+    db.prepare(`UPDATE agent_steps SET ${fields.join(', ')} WHERE id = @id`).run(values);
+  };
+
+  // Helper: fail the run
+  const failRun = (stepId: number | null, errorMessage: string) => {
+    if (stepId !== null) {
+      updateStep(stepId, 'failed', undefined, errorMessage);
+    }
+    db.prepare(`UPDATE agent_runs SET status = 'failed', output_summary = @error, updated_at = datetime('now') WHERE id = @id`)
+      .run({ id: agentRunId, error: errorMessage });
+  };
+
+  let currentStepId: number | null = null;
+  try {
+    // Step 1: 读取面试记录
+    const step1Id = createStep('读取面试记录', 1, `读取文件: ${input.filePath}`);
+    currentStepId = step1Id;
+    updateStep(step1Id, 'completed', `成功读取，共 ${rawContent.length} 字符`);
+    currentStepId = null;
+
+    // Step 2: Call DeepSeek to extract structured data
+    const step2Id = createStep('抽取结构化面试信息', 2);
+    const step3Id = createStep('抽取面试问题', 3);
+
+    updateStep(step2Id, 'running');
+    currentStepId = step2Id;
+
+    const systemPrompt = `你是一位专业的面试记录分析助手。你的任务是从用户提供的面试经历文本中，抽取结构化信息。
+
+规则：
+1. 所有自然语言字段输出简体中文。技术专有名词保持原文（如 Binder、RecyclerView、StateFlow、Kotlin、ViewModel 等）。
+2. 不要编造公司名称、轮次、面试结果。如果原文没有明确提及，使用 hint 提供的值，或使用 null/unknown。
+3. answerQuality 只能是 "unknown"、"good"、"medium"、"weak" 之一。
+4. result 只能是 "unknown"、"passed"、"failed"、"pending" 之一。
+5. questions 必须来自原文中真实出现或明显可推断的问题，不要生成泛化题库。
+6. weaknessTags 是对该问题回答质量的弱点分类，如 "framework-depth"、"follow-up-failed"、"concept-weak"、"no-answer"、"code-error"、"communication-issue" 等。
+7. observations 是对本次面试的总体观察和总结，用中文撰写。
+8. interviewerFocus 是面试官关注的重点领域。
+
+只输出有效 JSON：
+{
+  "interview": {
+    "company": "公司名或null",
+    "team": "团队名或null",
+    "round": "面试轮次或null",
+    "date": "日期或null",
+    "result": "unknown/passed/failed/pending",
+    "interviewerFocus": "面试官关注点或null",
+    "observations": "总体观察总结或null"
+  },
+  "questions": [
+    {
+      "questionText": "问题文本",
+      "topic": "技术主题",
+      "followUpQuestions": "追问内容或null",
+      "answerQuality": "unknown/good/medium/weak",
+      "weaknessTags": ["tag1", "tag2"]
+    }
+  ]
+}`;
+
+    const userPrompt = `公司提示: ${input.companyHint || '无'}
+轮次提示: ${input.roundHint || '无'}
+结果提示: ${input.resultHint || '无'}
+
+面试记录原文：
+${contentForPrompt}
+
+请从以上面试记录中抽取结构化信息。`;
+
+    const response = await apiRequest({
+      model: settings.settings.quiz_model || 'deepseek-v4-flash',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      stream: false,
+    }, apiKey);
+
+    const content = response.choices?.[0]?.message?.content;
+    if (!content) throw new Error('DeepSeek 返回空响应');
+
+    const parsed = JSON.parse(stripJsonFence(content));
+    if (!parsed.interview) throw new Error('响应缺少 interview 字段');
+    if (!Array.isArray(parsed.questions)) throw new Error('响应缺少 questions 数组');
+
+    // Validate interview.result
+    const VALID_RESULTS = ['unknown', 'passed', 'failed', 'pending'] as const;
+    let result: string = parsed.interview.result || 'unknown';
+    if (!VALID_RESULTS.includes(result as any)) {
+      if (input.resultHint && VALID_RESULTS.includes(input.resultHint as any)) {
+        result = input.resultHint;
+      } else {
+        result = 'unknown';
+      }
+    }
+
+    // Step 2 complete, Step 3 begin
+    updateStep(step2Id, 'completed', JSON.stringify(parsed.interview));
+    currentStepId = null;
+
+    updateStep(step3Id, 'running');
+    currentStepId = step3Id;
+
+    // Filter and normalize questions
+    const validQuestions = parsed.questions
+      .filter((q: any) => {
+        const text = (q.questionText || '').trim();
+        return text.length > 0;
+      })
+      .map((q: any) => ({
+        ...q,
+        questionText: (q.questionText || '').trim(),
+      }));
+
+    if (validQuestions.length === 0) {
+      throw new Error('未能从面试记录中抽取到有效问题');
+    }
+
+    updateStep(step3Id, 'completed', `成功抽取 ${validQuestions.length} 个问题`);
+    currentStepId = null;
+
+    // Step 4: Write to Interview Database
+    const step4Id = createStep('写入 Interview Database', 4);
+    updateStep(step4Id, 'running');
+    currentStepId = step4Id;
+
+    const iv = parsed.interview;
+    const insertInterview = db.prepare(
+      `INSERT INTO interview_records (company, team, round, date, result, source_file, interviewer_focus, observations, raw_notes)
+       VALUES (@company, @team, @round, @date, @result, @source_file, @interviewer_focus, @observations, @raw_notes)`
+    );
+    const ivResult = insertInterview.run({
+      company: iv.company || input.companyHint || '未知公司',
+      team: iv.team || null,
+      round: iv.round || input.roundHint || null,
+      date: iv.date || null,
+      result,
+      source_file: input.filePath,
+      interviewer_focus: iv.interviewerFocus || null,
+      observations: iv.observations || null,
+      raw_notes: rawContent,
+    });
+    const interviewId = ivResult.lastInsertRowid as number;
+
+    const insertQuestion = db.prepare(
+      `INSERT INTO interview_questions (interview_id, question_text, topic, follow_up_questions, answer_quality, weakness_tags)
+       VALUES (@interview_id, @question_text, @topic, @follow_up_questions, @answer_quality, @weakness_tags)`
+    );
+
+    const VALID_ANSWER_QUALITIES = ['unknown', 'good', 'medium', 'weak'] as const;
+
+    const insertedQuestions: any[] = [];
+    for (const q of validQuestions) {
+      // Validate answerQuality
+      let answerQuality: string = q.answerQuality || 'unknown';
+      if (!VALID_ANSWER_QUALITIES.includes(answerQuality as any)) {
+        answerQuality = 'unknown';
+      }
+
+      // Validate weaknessTags as array
+      let weaknessTags: string[] = [];
+      if (Array.isArray(q.weaknessTags)) {
+        weaknessTags = q.weaknessTags
+          .map((t: any) => String(t).trim())
+          .filter((t: string) => t.length > 0);
+      }
+
+      const qResult = insertQuestion.run({
+        interview_id: interviewId,
+        question_text: q.questionText || '',
+        topic: q.topic || null,
+        follow_up_questions: q.followUpQuestions || null,
+        answer_quality: answerQuality,
+        weakness_tags: JSON.stringify(weaknessTags),
+      });
+      const row = db.prepare('SELECT * FROM interview_questions WHERE id = ?').get(qResult.lastInsertRowid) as any;
+      insertedQuestions.push({
+        ...row,
+        weakness_tags: JSON.parse(row.weakness_tags || '[]'),
+      });
+    }
+
+    updateStep(step4Id, 'completed', `已写入 interview #${interviewId}，共 ${insertedQuestions.length} 个问题`);
+    currentStepId = null;
+
+    // Mark run as completed
+    const outputSummary = `公司: ${iv.company || input.companyHint || '未知'}\n` +
+      `轮次: ${iv.round || input.roundHint || '未知'}\n` +
+      `结果: ${result}\n` +
+      `问题数: ${insertedQuestions.length}\n` +
+      `弱点标签: ${[...new Set(insertedQuestions.flatMap((q: any) => q.weakness_tags))].join(', ') || '无'}`;
+
+    db.prepare(
+      `UPDATE agent_runs SET status = 'completed', output_summary = @output_summary, updated_at = datetime('now') WHERE id = @id`
+    ).run({ id: agentRunId, output_summary: outputSummary });
+
+    // Return the full interview with questions
+    const interview = db.prepare('SELECT * FROM interview_records WHERE id = ?').get(interviewId) as any;
+    const questions = db.prepare('SELECT * FROM interview_questions WHERE interview_id = ? ORDER BY created_at ASC').all(interviewId) as any[];
+
+    return {
+      interview: {
+        ...interview,
+        questions: questions.map((q: any) => ({
+          ...q,
+          weakness_tags: JSON.parse(q.weakness_tags || '[]'),
+        })),
+      },
+      agentRunId,
+    };
+  } catch (error: any) {
+    failRun(currentStepId, error.message || '未知错误');
+    throw error;
+  }
 }

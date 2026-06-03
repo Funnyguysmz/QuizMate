@@ -1,5 +1,6 @@
 import React from 'react';
 import { Badge } from '../shared/Badge';
+import { Button } from '../shared/Button';
 import type { StudyPlan } from '../../../shared/types';
 
 interface StudyPlanItemProps {
@@ -8,6 +9,7 @@ interface StudyPlanItemProps {
   onDelete: () => void;
   onStatusChange: (status: string) => void;
   onStudy: () => void;
+  onGenerateMaterial: () => void;
 }
 
 const statusConfig = {
@@ -22,24 +24,30 @@ const priorityConfig = {
   2: { label: '高', color: 'red' as const },
 };
 
-export function StudyPlanItem({ plan, onEdit, onDelete, onStatusChange, onStudy }: StudyPlanItemProps) {
+export function StudyPlanItem({ plan, onEdit, onDelete, onStatusChange, onStudy, onGenerateMaterial }: StudyPlanItemProps) {
   const status = statusConfig[plan.status];
   const priority = priorityConfig[plan.priority as keyof typeof priorityConfig] || priorityConfig[0];
+  const isDone = plan.status === 'done';
+  const hasMaterial = !!(plan.generated_material || plan.material_file);
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 transition-shadow hover:shadow-sm">
+    <div className={`bg-white dark:bg-gray-900 border rounded-lg p-4 transition-shadow hover:shadow-sm ${
+      isDone
+        ? 'border-green-200 dark:border-green-900/40 opacity-75 border-l-green-500 border-l-4'
+        : 'border-gray-200 dark:border-gray-800'
+    }`}>
       <div className="flex items-start gap-3">
         <button
-          onClick={() => onStatusChange(plan.status === 'done' ? 'pending' : plan.status === 'pending' ? 'in_progress' : 'done')}
+          onClick={() => onStatusChange(isDone ? 'pending' : plan.status === 'pending' ? 'in_progress' : 'done')}
           className={`mt-0.5 w-5 h-5 rounded-full border-2 shrink-0 transition-colors ${
-            plan.status === 'done'
+            isDone
               ? 'bg-green-500 border-green-500 text-white'
               : plan.status === 'in_progress'
               ? 'border-yellow-500 bg-yellow-100 dark:bg-yellow-900/30'
               : 'border-gray-300 dark:border-gray-600'
           }`}
         >
-          {plan.status === 'done' && (
+          {isDone && (
             <svg className="w-full h-full" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
@@ -48,14 +56,14 @@ export function StudyPlanItem({ plan, onEdit, onDelete, onStatusChange, onStudy 
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h4 className={`text-sm font-medium ${plan.status === 'done' ? 'text-gray-400 dark:text-gray-500 line-through' : 'text-gray-900 dark:text-white'}`}>
+            <h4 className={`text-sm font-medium ${isDone ? 'text-gray-400 dark:text-gray-500 line-through' : 'text-gray-900 dark:text-white'}`}>
               {plan.title}
             </h4>
             <Badge color={status.color}>{status.label}</Badge>
             {plan.priority > 0 && <Badge color={priority.color}>{priority.label}优先</Badge>}
             {plan.category && <Badge color="purple">{plan.category}</Badge>}
             {plan.ai_generated === 1 && <Badge color="blue">AI</Badge>}
-            {plan.material_file && <Badge color="green">已生成资料</Badge>}
+            {hasMaterial && <Badge color="green">已生成资料</Badge>}
           </div>
           {plan.notes && (
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 line-clamp-2">{plan.notes}</p>
@@ -71,13 +79,23 @@ export function StudyPlanItem({ plan, onEdit, onDelete, onStatusChange, onStudy 
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
+          {!isDone && !hasMaterial && (
+            <Button size="sm" variant="secondary" onClick={onGenerateMaterial}>
+              生成资料
+            </Button>
+          )}
+          {!isDone && hasMaterial && (
+            <Button size="sm" variant="primary" onClick={onStudy}>
+              进入学习
+            </Button>
+          )}
           <button onClick={onEdit} className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
           </button>
-          {(plan.generated_material || plan.material_file) && (
+          {isDone && hasMaterial && (
             <button onClick={onStudy} className="p-1 text-gray-400 hover:text-primary-600 dark:hover:text-primary-300 rounded transition-colors" title="进入学习">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5S19.832 5.477 21 6.253v13C19.832 18.477 18.246 18 16.5 18s-3.332.477-4.5 1.253" />

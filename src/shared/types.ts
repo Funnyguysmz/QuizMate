@@ -47,6 +47,25 @@ export const IPC_CHANNELS = {
 
   // Dialog
   DIALOG_OPEN_FOLDER: 'dialog:open-folder',
+
+  // Agent Runs
+  AGENT_RUNS_CREATE: 'agent-runs:create',
+  AGENT_RUNS_UPDATE: 'agent-runs:update',
+  AGENT_RUNS_GET: 'agent-runs:get',
+  AGENT_RUNS_LIST: 'agent-runs:list',
+  AGENT_STEPS_CREATE: 'agent-steps:create',
+  AGENT_STEPS_UPDATE: 'agent-steps:update',
+
+  // Interview Database
+  INTERVIEWS_CREATE: 'interviews:create',
+  INTERVIEWS_UPDATE: 'interviews:update',
+  INTERVIEWS_GET: 'interviews:get',
+  INTERVIEWS_LIST: 'interviews:list',
+  INTERVIEWS_DELETE: 'interviews:delete',
+  INTERVIEW_QUESTIONS_CREATE: 'interview-questions:create',
+  INTERVIEW_QUESTIONS_UPDATE: 'interview-questions:update',
+  INTERVIEW_QUESTIONS_DELETE: 'interview-questions:delete',
+  INTERVIEWS_IMPORT_FROM_FILE: 'interviews:import-from-file',
 } as const;
 
 // ---- Data Types ----
@@ -216,4 +235,153 @@ export interface AppSettings {
   quiz_default_count: number;
   quiz_model: string;
   dark_mode: boolean;
+}
+
+export type AgentRunType = 'material_generation' | 'wrong_answer_review' | 'interview_import';
+export type AgentRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type AgentStepStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface AgentRun {
+  id: number;
+  type: AgentRunType;
+  status: AgentRunStatus;
+  title: string;
+  input_summary: string | null;
+  output_summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentStep {
+  id: number;
+  run_id: number;
+  name: string;
+  status: AgentStepStatus;
+  order_index: number;
+  input: string | null;
+  output: string | null;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface AgentRunWithSteps extends AgentRun {
+  steps: AgentStep[];
+}
+
+export interface CreateAgentRunInput {
+  type: AgentRunType;
+  title: string;
+  input_summary?: string;
+}
+
+export interface UpdateAgentRunInput {
+  status?: AgentRunStatus;
+  output_summary?: string;
+  title?: string;
+}
+
+export interface CreateAgentStepInput {
+  run_id: number;
+  name: string;
+  order_index: number;
+  input?: string;
+}
+
+export interface UpdateAgentStepInput {
+  status?: AgentStepStatus;
+  output?: string;
+  error?: string;
+}
+
+export type InterviewResult = 'unknown' | 'passed' | 'failed' | 'pending';
+export type AnswerQuality = 'unknown' | 'good' | 'medium' | 'weak';
+
+export interface InterviewRecord {
+  id: number;
+  company: string;
+  team: string | null;
+  round: string | null;
+  date: string | null;
+  result: InterviewResult;
+  source_file: string | null;
+  interviewer_focus: string | null;
+  observations: string | null;
+  raw_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterviewQuestion {
+  id: number;
+  interview_id: number;
+  question_text: string;
+  topic: string | null;
+  follow_up_questions: string | null;
+  answer_quality: AnswerQuality;
+  weakness_tags: string[];
+  created_at: string;
+}
+
+export interface InterviewRecordWithQuestions extends InterviewRecord {
+  questions: InterviewQuestion[];
+}
+
+export interface CreateInterviewInput {
+  company: string;
+  team?: string;
+  round?: string;
+  date?: string;
+  result?: InterviewResult;
+  source_file?: string;
+  interviewer_focus?: string;
+  observations?: string;
+  raw_notes?: string;
+}
+
+export interface UpdateInterviewInput {
+  company?: string;
+  team?: string;
+  round?: string;
+  date?: string;
+  result?: InterviewResult;
+  source_file?: string;
+  interviewer_focus?: string;
+  observations?: string;
+  raw_notes?: string;
+}
+
+export interface InterviewFilters {
+  company?: string;
+  result?: string;
+  search?: string;
+}
+
+export interface CreateInterviewQuestionInput {
+  interview_id: number;
+  question_text: string;
+  topic?: string;
+  follow_up_questions?: string;
+  answer_quality?: AnswerQuality;
+  weakness_tags?: string[];
+}
+
+export interface UpdateInterviewQuestionInput {
+  question_text?: string;
+  topic?: string;
+  follow_up_questions?: string;
+  answer_quality?: AnswerQuality;
+  weakness_tags?: string[];
+}
+
+export interface ImportInterviewInput {
+  filePath: string;
+  companyHint?: string;
+  roundHint?: string;
+  resultHint?: InterviewResult;
+}
+
+export interface ImportInterviewResult {
+  interview: InterviewRecordWithQuestions;
+  agentRunId: number;
 }

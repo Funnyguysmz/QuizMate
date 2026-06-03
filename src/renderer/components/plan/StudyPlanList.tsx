@@ -8,9 +8,10 @@ interface StudyPlanListProps {
   onDelete: (id: number) => void;
   onStatusChange: (id: number, status: string) => void;
   onStudy: (plan: StudyPlan) => void;
+  onGenerateMaterial: (plan: StudyPlan) => void;
 }
 
-export function StudyPlanList({ plans, onEdit, onDelete, onStatusChange, onStudy }: StudyPlanListProps) {
+export function StudyPlanList({ plans, onEdit, onDelete, onStatusChange, onStudy, onGenerateMaterial }: StudyPlanListProps) {
   return (
     <div className="space-y-3">
       {plans.map((plan) => (
@@ -21,6 +22,7 @@ export function StudyPlanList({ plans, onEdit, onDelete, onStatusChange, onStudy
           onDelete={() => onDelete(plan.id)}
           onStatusChange={(status) => onStatusChange(plan.id, status)}
           onStudy={() => onStudy(plan)}
+          onGenerateMaterial={() => onGenerateMaterial(plan)}
         />
       ))}
     </div>

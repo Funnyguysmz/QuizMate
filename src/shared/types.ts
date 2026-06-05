@@ -143,6 +143,9 @@ export interface QuizSession {
   total_questions: number;
   correct_count: number;
   status: 'pending' | 'in_progress' | 'completed' | 'reviewed';
+  agent_run_id: number | null;
+  source_summary: string | null;
+  quality_summary: string | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -169,6 +172,9 @@ export interface QuizGenerateInput {
   files: string[];
   questionCount: number;
   topic?: string;
+  mode?: 'manual_files' | 'smart_agent';
+  focus?: string;
+  enableThinking?: boolean;
 }
 
 export interface GenerateStudyTodosInput {
@@ -237,7 +243,7 @@ export interface AppSettings {
   dark_mode: boolean;
 }
 
-export type AgentRunType = 'material_generation' | 'wrong_answer_review' | 'interview_import';
+export type AgentRunType = 'material_generation' | 'wrong_answer_review' | 'interview_import' | 'quiz_generation';
 export type AgentRunStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type AgentStepStatus = 'pending' | 'running' | 'completed' | 'failed';
 

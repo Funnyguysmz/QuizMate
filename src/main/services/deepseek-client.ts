@@ -1,6 +1,7 @@
 import { getDatabase } from './database';
-import { collectMarkdownFiles, readMarkdownContent } from './file-scanner';
+import { collectMarkdownFiles, collectAllMarkdownFiles, readMarkdownContent } from './file-scanner';
 import { loadSettings } from './settings-store';
+import { selectQuizSources } from './quiz-source-selector';
 import type {
   GenerateStudyMaterialsInput,
   GenerateStudyTodosInput,
@@ -11,12 +12,15 @@ import type {
   QuizSessionWithQuestions,
   StudyPlan,
 } from '../../shared/types';
+import type { SelectedFile, QuizSourceResult } from './quiz-source-selector';
 import * as https from 'https';
 import * as http from 'http';
 import fs from 'fs';
 import path from 'path';
 
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
+const DEFAULT_API_TIMEOUT_MS = 60_000;
+const THINKING_API_TIMEOUT_MS = 180_000;
 
 function buildPrompt(files: string[], questionCount: number, topic?: string): { system: string; user: string } {
   const focusInstruction = topic
@@ -68,7 +72,7 @@ function buildPrompt(files: string[], questionCount: number, topic?: string): { 
   return { system, user };
 }
 
-function apiRequest(body: any, apiKey: string): Promise<any> {
+function apiRequest(body: any, apiKey: string, timeoutMs = DEFAULT_API_TIMEOUT_MS): Promise<any> {
   const url = new URL(DEEPSEEK_ENDPOINT);
   const payload = JSON.stringify(body);
 
@@ -76,9 +80,9 @@ function apiRequest(body: any, apiKey: string): Promise<any> {
   const useProxy = !!proxyUrl;
 
   if (useProxy) {
-    return requestViaProxy(proxyUrl, url, payload, apiKey);
+    return requestViaProxy(proxyUrl, url, payload, apiKey, timeoutMs);
   }
-  return requestDirect(url, payload, apiKey);
+  return requestDirect(url, payload, apiKey, timeoutMs);
 }
 
 function stripJsonFence(content: string): string {
@@ -113,7 +117,7 @@ function buildSourceMaterial(files: string[], maxPerFile = 3500): string {
   }).join('\n\n---\n\n');
 }
 
-function requestDirect(url: URL, payload: string, apiKey: string): Promise<any> {
+function requestDirect(url: URL, payload: string, apiKey: string, timeoutMs: number): Promise<any> {
   return new Promise((resolve, reject) => {
     const options: https.RequestOptions = {
       hostname: url.hostname,
@@ -148,9 +152,9 @@ function requestDirect(url: URL, payload: string, apiKey: string): Promise<any> 
       reject(new Error(`DeepSeek API request failed: ${err.message}`));
     });
 
-    req.setTimeout(60000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy();
-      reject(new Error('DeepSeek API request timed out'));
+      reject(new Error(`DeepSeek API request timed out after ${Math.round(timeoutMs / 1000)}s`));
     });
 
     req.write(payload);
@@ -158,12 +162,12 @@ function requestDirect(url: URL, payload: string, apiKey: string): Promise<any> 
   });
 }
 
-function requestViaProxy(proxyUrl: string, targetUrl: URL, payload: string, apiKey: string): Promise<any> {
+function requestViaProxy(proxyUrl: string, targetUrl: URL, payload: string, apiKey: string, timeoutMs: number): Promise<any> {
   let proxy: URL;
   try {
     proxy = new URL(proxyUrl);
   } catch {
-    return requestDirect(targetUrl, payload, apiKey);
+    return requestDirect(targetUrl, payload, apiKey, timeoutMs);
   }
 
   return new Promise((resolve, reject) => {
@@ -201,9 +205,9 @@ function requestViaProxy(proxyUrl: string, targetUrl: URL, payload: string, apiK
       reject(new Error(`DeepSeek API request failed: ${err.message}`));
     });
 
-    req.setTimeout(60000, () => {
+    req.setTimeout(timeoutMs, () => {
       req.destroy();
-      reject(new Error('DeepSeek API request timed out'));
+      reject(new Error(`DeepSeek API request timed out after ${Math.round(timeoutMs / 1000)}s`));
     });
 
     req.write(payload);
@@ -229,6 +233,16 @@ function parseQuizResponse(data: any): any[] {
 }
 
 export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessionWithQuestions> {
+  const mode = input.mode || 'smart_agent';
+
+  if (mode === 'manual_files') {
+    return generateQuizManual(input);
+  }
+
+  return generateQuizSmartAgent(input);
+}
+
+async function generateQuizManual(input: QuizGenerateInput): Promise<QuizSessionWithQuestions> {
   const settings = loadSettings();
   const apiKey = getApiKeyOrThrow();
 
@@ -251,7 +265,8 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
   const title = `测验 - ${new Date().toLocaleDateString('zh-CN')}（${questions.length}题）`;
 
   const sessionResult = db.prepare(
-    `INSERT INTO quiz_sessions (title, source_files, total_questions, status) VALUES (?, ?, ?, 'in_progress')`
+    `INSERT INTO quiz_sessions (title, source_files, total_questions, status, agent_run_id, source_summary, quality_summary)
+     VALUES (?, ?, ?, 'in_progress', NULL, NULL, NULL)`
   ).run(title, JSON.stringify(sourceFiles), questions.length);
 
   const sessionId = sessionResult.lastInsertRowid as number;
@@ -277,6 +292,485 @@ export async function generateQuiz(input: QuizGenerateInput): Promise<QuizSessio
     source_files: JSON.parse(session.source_files),
     questions: dbQuestions.map(q => ({ ...q, options: JSON.parse(q.options) })),
   };
+}
+
+async function generateQuizSmartAgent(input: QuizGenerateInput): Promise<QuizSessionWithQuestions> {
+  const settings = loadSettings();
+  const apiKey = getApiKeyOrThrow();
+  const db = getDatabase();
+
+  // Create agent run
+  const runStmt = db.prepare(
+    `INSERT INTO agent_runs (type, status, title, input_summary)
+     VALUES (@type, 'running', @title, @input_summary)`
+  );
+  const focusHint = input.focus || input.topic || '';
+  const fileHint = input.files.length > 0 ? `参考文件: ${input.files.length}个` : '自动筛选';
+  const runResult = runStmt.run({
+    type: 'quiz_generation',
+    title: `智能出题：${focusHint || '自动聚焦弱点'}`,
+    input_summary: `题目数量: ${input.questionCount}\n重点: ${focusHint || '无'}\n${fileHint}`,
+  });
+  const agentRunId = runResult.lastInsertRowid as number;
+
+  // ── step helpers ────────
+  const createStep = (name: string, orderIndex: number, stepInput?: string): number => {
+    const stmt = db.prepare(
+      `INSERT INTO agent_steps (run_id, name, status, order_index, input)
+       VALUES (@run_id, @name, 'pending', @order_index, @input)`
+    );
+    const r = stmt.run({ run_id: agentRunId, name, order_index: orderIndex, input: stepInput || null });
+    return r.lastInsertRowid as number;
+  };
+
+  const updateStep = (stepId: number, status: string, output?: string, error?: string) => {
+    const fields = ['status = @status'];
+    const values: Record<string, any> = { id: stepId, status };
+    if (output !== undefined) { fields.push('output = @output'); values.output = output; }
+    if (error !== undefined) { fields.push('error = @error'); values.error = error; }
+    if (status === 'completed') { fields.push("completed_at = datetime('now')"); }
+    db.prepare(`UPDATE agent_steps SET ${fields.join(', ')} WHERE id = @id`).run(values);
+  };
+
+  const failRun = (stepId: number | null, errorMessage: string) => {
+    if (stepId !== null) updateStep(stepId, 'failed', undefined, errorMessage);
+    db.prepare(
+      `UPDATE agent_runs SET status = 'failed', output_summary = @error, updated_at = datetime('now') WHERE id = @id`
+    ).run({ id: agentRunId, error: errorMessage });
+  };
+
+  let currentStepId: number | null = null;
+
+  try {
+    // ════════════════════════════════════════════
+    // Step 1: 读取历史错题与面试弱点
+    // ════════════════════════════════════════════
+    const step1Id = createStep('读取历史错题与面试弱点', 1);
+    currentStepId = step1Id;
+    updateStep(step1Id, 'running');
+
+    const wrongAnswers = db.prepare(
+      `SELECT * FROM wrong_answers WHERE status = 'unresolved' ORDER BY review_count DESC, last_correct ASC LIMIT 50`
+    ).all() as any[];
+
+    const weakQuestions = db.prepare(
+      `SELECT * FROM interview_questions WHERE answer_quality IN ('weak', 'medium') ORDER BY created_at DESC LIMIT 50`
+    ).all() as any[];
+
+    const wrongAnswerTopics = new Set<string>();
+    const interviewTopics = new Set<string>();
+    const weaknessTags = new Set<string>();
+
+    for (const wa of wrongAnswers) {
+      if (wa.category) wrongAnswerTopics.add(wa.category);
+    }
+    for (const q of weakQuestions) {
+      if (q.topic) interviewTopics.add(q.topic);
+      try {
+        const tags = JSON.parse(q.weakness_tags || '[]');
+        for (const tag of tags) {
+          if (typeof tag === 'string' && tag.trim()) weaknessTags.add(tag.trim());
+        }
+      } catch {}
+    }
+
+    const step1Parts: string[] = [];
+    if (wrongAnswers.length > 0) step1Parts.push(`未解决错题${wrongAnswers.length}道，涉及${wrongAnswerTopics.size}个领域`);
+    if (weakQuestions.length > 0) step1Parts.push(`面试弱点${weakQuestions.length}个`);
+    if (weaknessTags.size > 0) step1Parts.push(`弱点标签: ${Array.from(weaknessTags).slice(0, 10).join('、')}`);
+    const step1Output = step1Parts.length > 0 ? step1Parts.join('；') : '暂无历史弱点数据';
+
+    updateStep(step1Id, 'completed', step1Output);
+    currentStepId = null;
+
+    // ════════════════════════════════════════════
+    // Step 2: 搜集候选资料
+    // ════════════════════════════════════════════
+    const step2Id = createStep('搜集候选资料', 2);
+    currentStepId = step2Id;
+    updateStep(step2Id, 'running');
+
+    const allFiles = collectAllMarkdownFiles(settings.settings.study_materials_path);
+
+    if (allFiles.length === 0) {
+      throw new Error('未找到任何本地资料文件，请先导入学习资料');
+    }
+
+    updateStep(step2Id, 'completed', `共找到 ${allFiles.length} 个 Markdown 文件`);
+    currentStepId = null;
+
+    // ════════════════════════════════════════════
+    // Step 3: 筛选高价值资料
+    // ════════════════════════════════════════════
+    const step3Id = createStep('筛选高价值资料', 3);
+    currentStepId = step3Id;
+    updateStep(step3Id, 'running');
+
+    const selectedResult = selectQuizSources({
+      explicitFiles: input.files,
+      questionCount: input.questionCount,
+      focus: input.focus || input.topic,
+      studyMaterialsPath: settings.settings.study_materials_path,
+    });
+
+    if (selectedResult.selectedFiles.length === 0) {
+      throw new Error('未找到高价值资料，请选择参考文件或先导入面试/错题数据');
+    }
+
+    const step3Output = `选中 ${selectedResult.selectedFiles.length} 个文件\n` +
+      `重点领域: ${selectedResult.focusTopics.slice(0, 5).join(', ') || '无'}\n` +
+      `弱点概述: ${selectedResult.weaknessSummary}`;
+
+    updateStep(step3Id, 'completed', step3Output + `\n忽略文件: ${selectedResult.ignoredFiles.length} 个`);
+    currentStepId = null;
+
+    // ════════════════════════════════════════════
+    // Step 4: 总结出题蓝图
+    // ════════════════════════════════════════════
+    const step4Id = createStep('总结出题蓝图', 4);
+    currentStepId = step4Id;
+    updateStep(step4Id, 'running');
+
+    const blueprint = {
+      focusTopics: selectedResult.focusTopics,
+      weaknessSummary: selectedResult.weaknessSummary,
+      questionCount: input.questionCount,
+      selectedFiles: selectedResult.selectedFiles.map(f => ({ path: f.path, title: f.title, score: f.score })),
+      questionDistribution: selectedResult.focusTopics.length > 0
+        ? `基于 ${selectedResult.focusTopics.length} 个重点领域分配题目`
+        : '基于选中资料内容分配题目',
+    };
+
+    updateStep(step4Id, 'completed', JSON.stringify(blueprint, null, 2));
+    currentStepId = null;
+
+    // ════════════════════════════════════════════
+    // Step 5: DeepSeek thinking 生成中文试题
+    // ════════════════════════════════════════════
+    const step5Id = createStep('DeepSeek thinking 生成中文试题', 5);
+    currentStepId = step5Id;
+    updateStep(step5Id, 'running');
+
+    const { system: smartSystem, user: smartUser } = buildSmartQuizPrompt(
+      selectedResult.selectedFiles,
+      input.questionCount,
+      selectedResult.focusTopics,
+      selectedResult.weaknessSummary,
+      input.topic,
+      input.focus
+    );
+
+    const requestBody: any = {
+      model: 'deepseek-v4-pro',
+      messages: [
+        { role: 'system', content: smartSystem },
+        { role: 'user', content: smartUser },
+      ],
+      stream: false,
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'high',
+    };
+
+    const response = await apiRequest(requestBody, apiKey, THINKING_API_TIMEOUT_MS);
+    const responseContent = response.choices?.[0]?.message?.content;
+    if (!responseContent) throw new Error('DeepSeek 返回空响应');
+
+    let questions: any[];
+    let repairNeeded = false;
+
+    try {
+      questions = parseQuizResponse(response);
+      const validationError = validateQuizQuestions(questions, input.questionCount);
+      if (validationError) throw new Error(validationError);
+    } catch (firstError: any) {
+      repairNeeded = true;
+      updateStep(step5Id, 'running', undefined, `首次生成校验不通过: ${firstError.message}，尝试修复...`);
+
+      const repairPrompt = buildRepairPrompt(smartUser, responseContent, firstError.message, input.questionCount);
+      const repairBody: any = {
+        model: 'deepseek-v4-pro',
+        messages: [
+          { role: 'system', content: smartSystem },
+          { role: 'user', content: repairPrompt },
+        ],
+        stream: false,
+        thinking: { type: 'enabled' },
+        reasoning_effort: 'high',
+      };
+
+      const repairResponse = await apiRequest(repairBody, apiKey, THINKING_API_TIMEOUT_MS);
+
+      try {
+        questions = parseQuizResponse(repairResponse);
+        const repairValidation = validateQuizQuestions(questions, input.questionCount);
+        if (repairValidation) throw new Error(repairValidation);
+      } catch (repairError: any) {
+        throw new Error(`修复失败: ${repairError.message}`);
+      }
+    }
+
+    const step5Output = `成功生成 ${questions.length} 道题${repairNeeded ? '（经修复）' : ''}`;
+    updateStep(step5Id, 'completed', step5Output);
+    currentStepId = null;
+
+    // ════════════════════════════════════════════
+    // Step 6: 校验并写入测验
+    // ════════════════════════════════════════════
+    const step6Id = createStep('校验并写入测验', 6);
+    currentStepId = step6Id;
+    updateStep(step6Id, 'running');
+
+    const sourceSummary = JSON.stringify({
+      selectedFiles: selectedResult.selectedFiles.map(f => ({ path: f.path, title: f.title, score: f.score })),
+      focusTopics: selectedResult.focusTopics,
+      weaknessSummary: selectedResult.weaknessSummary,
+    });
+
+    const qualitySummary = JSON.stringify({
+      exactCount: questions.length === input.questionCount,
+      chineseChecked: true,
+      optionPrefixChecked: true,
+      repairNeeded,
+      validationPassed: true,
+    });
+
+    const title = `测验 - ${new Date().toLocaleDateString('zh-CN')}（${questions.length}题）`;
+
+    let sessionId!: number;
+
+    const transaction = db.transaction(() => {
+      const sessionResult = db.prepare(
+        `INSERT INTO quiz_sessions (title, source_files, total_questions, status, agent_run_id, source_summary, quality_summary)
+         VALUES (?, ?, ?, 'in_progress', ?, ?, ?)`
+      ).run(
+        title,
+        JSON.stringify(selectedResult.selectedFiles.map(f => f.path)),
+        questions.length,
+        agentRunId,
+        sourceSummary,
+        qualitySummary
+      );
+      sessionId = sessionResult.lastInsertRowid as number;
+
+      const insertQuestion = db.prepare(
+        `INSERT INTO quiz_questions (session_id, question_number, question_text, options, correct_answer, explanation, source_file)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const matchedFile = selectedResult.selectedFiles.find(f =>
+          (q.question || '').toLowerCase().includes(f.title.toLowerCase())
+        );
+        const sourceFile = matchedFile?.path || selectedResult.selectedFiles[0]?.path || null;
+
+        insertQuestion.run(
+          sessionId, i + 1, q.question, JSON.stringify(q.options),
+          q.correctAnswer, q.explanation || null, sourceFile
+        );
+      }
+    });
+
+    transaction();
+
+    updateStep(step6Id, 'completed', `已写入 quiz_session #${sessionId}，共 ${questions.length} 道题`);
+    db.prepare(
+      `UPDATE agent_runs SET status = 'completed', output_summary = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(
+      `生成 ${questions.length} 道题\n焦点: ${selectedResult.focusTopics.slice(0, 3).join(', ') || '无'}\n资料: ${selectedResult.selectedFiles.length} 个文件`,
+      agentRunId
+    );
+    currentStepId = null;
+
+    // ── return ──
+    const session = db.prepare('SELECT * FROM quiz_sessions WHERE id = ?').get(sessionId) as any;
+    const dbQuestions = db.prepare('SELECT * FROM quiz_questions WHERE session_id = ? ORDER BY question_number').all(sessionId) as any[];
+
+    return {
+      ...session,
+      source_files: JSON.parse(session.source_files),
+      questions: dbQuestions.map(q => ({ ...q, options: JSON.parse(q.options) })),
+    };
+  } catch (error: any) {
+    failRun(currentStepId, error.message || '未知错误');
+    throw error;
+  }
+}
+
+function buildSmartQuizPrompt(
+  selectedFiles: SelectedFile[],
+  questionCount: number,
+  focusTopics: string[],
+  weaknessSummary: string,
+  topic?: string,
+  focus?: string
+): { system: string; user: string } {
+  const userFocus = focus || topic;
+  const focusInstruction = userFocus
+    ? `题目应重点围绕"${userFocus}"展开。`
+    : focusTopics.length > 0
+      ? `题目应重点围绕以下焦点领域展开：${focusTopics.join('、')}。`
+      : '题目应覆盖资料中的不同主题。';
+
+  const system = `你是一名资深技术面试官，负责为准备面试的高级软件工程师生成高质量的多选题。
+
+你掌握以下背景信息：
+- 候选人的历史弱项领域
+- 选中的学习资料
+- 焦点领域
+
+规则：
+1. 基于提供的资料精确生成 ${questionCount} 道题。
+2. 每题必须包含 4 个选项（A, B, C, D），选项前缀保持英文字母大写。
+3. 正确答案必须唯一且可在资料中验证。
+4. 干扰项应合理，包含常见的误解作为错误选项。
+5. ${focusInstruction}
+6. 如果资料包含代码，应在题目中适当加入代码片段。
+7. 每题必须附带详细解释，说明正确答案的理由，并指出常见错误。
+8. 特别关注候选人的弱点领域，针对性地出题帮助巩固薄弱环节。
+9. 只输出有效 JSON，不要其他任何文本。
+
+语言要求：
+- 所有题目的题干（question）、选项文本（options）、解释（explanation）都必须使用**简体中文**输出。
+- 技术专有名词、API 名称、类名、框架名、代码片段保持英文原文，不要翻译。例如 RecyclerView、ViewModel、StateFlow、CoroutineScope、Kotlin、Jetpack Compose 等应保持原样。
+- JSON 字段名保持英文（question、options、correctAnswer、explanation），不要翻译成中文。
+- 选项前缀保持 "A) ", "B) ", "C) ", "D) " 格式，字母为大写英文。
+
+"correctAnswer" 字段的值必须恰好是 "A"、"B"、"C" 或 "D"——不能填写选项全文。
+"options" 数组必须恰好包含 4 个字符串，每个以大写字母 + ") " 开头。
+"explanation" 字段应包含 2-5 句有技术深度的解释。
+
+返回如下 JSON 对象：
+{
+  "questions": [
+    {
+      "question": "...",
+      "options": ["A) ...", "B) ...", "C) ...", "D) ..."],
+      "correctAnswer": "A",
+      "explanation": "..."
+    }
+  ]
+}`;
+
+  const sources = selectedFiles.map(file => {
+    const content = readMarkdownContent(file.path);
+    return `## ${file.title}\nPath: ${file.path}\n\n${content.substring(0, 4000)}`;
+  }).join('\n\n---\n\n');
+
+  const userFocusLine = userFocus ? `用户关注方向：${userFocus}\n\n` : '';
+  const user = `${userFocusLine}候选人弱点分析：
+${weaknessSummary}
+
+焦点领域：
+${focusTopics.length > 0 ? focusTopics.join('、') : '无特定焦点'}
+
+参考资料：
+${sources}
+
+请基于上述资料和候选人的弱点分析，生成 ${questionCount} 道有针对性且高质量的多选题。题目应重点考察候选人的薄弱环节，帮助其巩固知识。`;
+
+  return { system, user };
+}
+
+function validateQuizQuestions(questions: any[], expectedCount: number): string | null {
+  if (!Array.isArray(questions)) return 'questions 不是数组';
+  if (questions.length === 0) return '未生成任何题目';
+  if (questions.length !== expectedCount) return `题目数量不符: 期望${expectedCount}题，实际${questions.length}题`;
+
+  // Chinese character detection: at least one CJK character in the range 一-鿿
+  const hasChinese = (text: string): boolean => /[一-鿿]/.test(text);
+  const hasSemanticContent = (text: string): boolean => {
+    const reasonWords = ['正确原因', '因为', '原因', '所以', '因此', '关键在于', '本质是'];
+    const pitfallWords = ['常见误区', '误区', '容易误解', '错误理解', '不要认为', '容易犯', '易错点'];
+    const examWords = ['考点', '考察', '重点', '关键点', '核心机制', '面试中', '常考'];
+    const allWords = [...reasonWords, ...pitfallWords, ...examWords];
+    const hasKeyword = allWords.some(kw => text.includes(kw));
+    const chineseCharCount = (text.match(/[一-鿿]/g) || []).length;
+    const sentenceCount = (text.match(/[。！？；]/g) || []).length;
+    return hasKeyword || (chineseCharCount >= 40 && sentenceCount >= 2);
+  };
+
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+
+    // Question text must exist and contain Chinese
+    if (!q.question || typeof q.question !== 'string' || q.question.trim().length === 0) {
+      return `第${i + 1}题题干为空`;
+    }
+    if (!hasChinese(q.question)) {
+      return `第${i + 1}题题干未包含中文`;
+    }
+
+    // Options must be exactly 4
+    if (!Array.isArray(q.options) || q.options.length !== 4) {
+      return `第${i + 1}题选项不是4个`;
+    }
+
+    // Each option must start with the correct prefix. Technical option values
+    // may be pure identifiers, but the option set should still read in Chinese.
+    const expectedPrefixes = ['A) ', 'B) ', 'C) ', 'D) '];
+    let optionsWithChinese = 0;
+    for (let j = 0; j < 4; j++) {
+      const opt = q.options[j];
+      if (typeof opt !== 'string' || !opt.startsWith(expectedPrefixes[j])) {
+        return `第${i + 1}题选项${j + 1}前缀不正确，期望"${expectedPrefixes[j].trim()}"开头`;
+      }
+      const optBody = opt.slice(3).trim(); // text after "X) "
+      if (optBody.length === 0) {
+        return `第${i + 1}题选项${j + 1}内容为空`;
+      }
+      if (hasChinese(optBody)) optionsWithChinese++;
+    }
+    if (optionsWithChinese === 0) {
+      return `第${i + 1}题选项缺少中文语境`;
+    }
+
+    // correctAnswer must be A/B/C/D
+    if (!['A', 'B', 'C', 'D'].includes(q.correctAnswer)) {
+      return `第${i + 1}题 correctAnswer 不是 A/B/C/D: ${q.correctAnswer}`;
+    }
+
+    // Explanation must exist and contain Chinese
+    if (!q.explanation || typeof q.explanation !== 'string' || q.explanation.trim().length === 0) {
+      return `第${i + 1}题缺少解释`;
+    }
+    if (!hasChinese(q.explanation)) {
+      return `第${i + 1}题解释未包含中文`;
+    }
+    if (!hasSemanticContent(q.explanation)) {
+      return `第${i + 1}题解释过于空泛，缺少正确原因/常见误区/考点说明`;
+    }
+  }
+
+  return null; // valid
+}
+
+function buildRepairPrompt(
+  originalUserPrompt: string,
+  previousResponse: string,
+  errorMessage: string,
+  expectedCount: number
+): string {
+  return `之前的生成结果校验未通过。
+
+校验错误：${errorMessage}
+期望题目数量：${expectedCount} 题
+
+之前模型返回的内容（可能格式错误或内容不符合要求）：
+${previousResponse}
+
+─── 原始出题要求与参考资料 ───
+
+${originalUserPrompt}
+
+─── 修复要求 ───
+
+请重新生成完全符合要求的多选题 JSON：
+1. 只输出纯 JSON 对象，不要包含 \`\`\` 或任何 markdown 标记。
+2. JSON 必须包含 "questions" 数组，恰好 ${expectedCount} 道题。
+3. 每道题包含 "question"（简体中文题干）、"options"（恰好4个选项字符串，以 "A) " "B) " "C) " "D) " 开头）、"correctAnswer"（仅 "A"/"B"/"C"/"D"）、"explanation"（简体中文解释）。
+4. 所有题目文字使用简体中文，技术专有名词（如 RecyclerView、ViewModel、StateFlow、Binder、Kotlin 等）保持英文原文。
+5. 解释必须包含正确原因、常见误区或考点中的至少一项。`;
 }
 
 export async function generateStudyTodos(input: GenerateStudyTodosInput): Promise<StudyPlan[]> {

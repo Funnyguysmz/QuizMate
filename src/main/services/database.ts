@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS quiz_sessions (
     total_questions INTEGER NOT NULL,
     correct_count   INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'pending',
+    agent_run_id    INTEGER,
+    source_summary  TEXT,
+    quality_summary TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     completed_at    TEXT
 );
@@ -160,17 +163,33 @@ export function getDatabase(): Database.Database {
 }
 
 function migrateDatabase(database: Database.Database): void {
-  const columns = database.prepare('PRAGMA table_info(study_plans)').all() as Array<{ name: string }>;
-  const columnNames = new Set(columns.map((column) => column.name));
-  const migrations = [
+  // Migrate study_plans
+  const planColumns = database.prepare('PRAGMA table_info(study_plans)').all() as Array<{ name: string }>;
+  const planColumnNames = new Set(planColumns.map((column) => column.name));
+  const planMigrations = [
     { name: 'source_files', sql: "ALTER TABLE study_plans ADD COLUMN source_files TEXT NOT NULL DEFAULT '[]'" },
     { name: 'generated_material', sql: 'ALTER TABLE study_plans ADD COLUMN generated_material TEXT' },
     { name: 'material_file', sql: 'ALTER TABLE study_plans ADD COLUMN material_file TEXT' },
     { name: 'ai_generated', sql: 'ALTER TABLE study_plans ADD COLUMN ai_generated INTEGER NOT NULL DEFAULT 0' },
   ];
 
-  for (const migration of migrations) {
-    if (!columnNames.has(migration.name)) {
+  for (const migration of planMigrations) {
+    if (!planColumnNames.has(migration.name)) {
+      database.exec(migration.sql);
+    }
+  }
+
+  // Migrate quiz_sessions
+  const quizColumns = database.prepare('PRAGMA table_info(quiz_sessions)').all() as Array<{ name: string }>;
+  const quizColumnNames = new Set(quizColumns.map((column) => column.name));
+  const quizMigrations = [
+    { name: 'agent_run_id', sql: 'ALTER TABLE quiz_sessions ADD COLUMN agent_run_id INTEGER' },
+    { name: 'source_summary', sql: 'ALTER TABLE quiz_sessions ADD COLUMN source_summary TEXT' },
+    { name: 'quality_summary', sql: 'ALTER TABLE quiz_sessions ADD COLUMN quality_summary TEXT' },
+  ];
+
+  for (const migration of quizMigrations) {
+    if (!quizColumnNames.has(migration.name)) {
       database.exec(migration.sql);
     }
   }

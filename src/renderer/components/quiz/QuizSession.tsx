@@ -18,6 +18,17 @@ export function QuizSession({ session, currentIndex, onNavigate, onAnswer, onCom
   const progress = (answeredCount / session.questions.length) * 100;
   const allAnswered = answeredCount === session.questions.length;
 
+  const qualityTags: string[] = [];
+  if ((session as any).quality_summary) {
+    try {
+      const qs = JSON.parse((session as any).quality_summary);
+      if (qs.chineseChecked) qualityTags.push('已通过中文校验');
+      if (qs.optionPrefixChecked) qualityTags.push('已通过选项格式校验');
+      if (qs.repairNeeded === false) qualityTags.push('一次生成通过');
+      if ((session as any).agent_run_id) qualityTags.push('DeepSeek thinking');
+    } catch {}
+  }
+
   if (!question) return null;
 
   return (
@@ -37,6 +48,16 @@ export function QuizSession({ session, currentIndex, onNavigate, onAnswer, onCom
           style={{ width: `${progress}%` }}
         />
       </div>
+
+      {qualityTags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {qualityTags.map((tag) => (
+            <span key={tag} className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
 
       <QuizCard
         question={question}

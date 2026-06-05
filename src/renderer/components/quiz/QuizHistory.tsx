@@ -35,6 +35,21 @@ export function QuizHistory({ sessions, onSelect }: QuizHistoryProps) {
                   year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
                 })}
               </p>
+              {session.source_summary && (() => {
+                try {
+                  const summary = JSON.parse(session.source_summary);
+                  const fileCount = summary.selectedFiles?.length || 0;
+                  const topicCount = summary.focusTopics?.length || 0;
+                  if (fileCount > 0 || topicCount > 0) {
+                    return (
+                      <p className="text-xs text-gray-400 mt-0.5 truncate max-w-md">
+                        智能选材 · {fileCount} 个资料{ topicCount > 0 ? ` · ${topicCount} 个焦点` : ''}
+                      </p>
+                    );
+                  }
+                } catch {}
+                return null;
+              })()}
             </div>
             <div className="flex items-center gap-3">
               {session.status === 'completed' ? (
@@ -43,6 +58,9 @@ export function QuizHistory({ sessions, onSelect }: QuizHistoryProps) {
                 </span>
               ) : (
                 <Badge color="yellow">进行中</Badge>
+              )}
+              {session.agent_run_id && (
+                <Badge color="purple">Agent</Badge>
               )}
               <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />

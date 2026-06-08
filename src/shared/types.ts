@@ -243,7 +243,7 @@ export interface AppSettings {
   dark_mode: boolean;
 }
 
-export type AgentRunType = 'material_generation' | 'wrong_answer_review' | 'interview_import' | 'quiz_generation';
+export type AgentRunType = 'material_generation' | 'wrong_answer_review' | 'interview_import' | 'quiz_generation' | 'study_planning';
 export type AgentRunStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type AgentStepStatus = 'pending' | 'running' | 'completed' | 'failed';
 

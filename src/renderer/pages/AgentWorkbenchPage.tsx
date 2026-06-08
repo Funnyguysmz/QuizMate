@@ -39,6 +39,7 @@ interface LocalInsight {
 const filters: Array<{ label: string; value: AgentRunType | 'all' }> = [
   { label: '全部', value: 'all' },
   { label: '智能出题', value: 'quiz_generation' },
+  { label: '学习编排', value: 'study_planning' },
   { label: '资料生成', value: 'material_generation' },
   { label: '错题复盘', value: 'wrong_answer_review' },
   { label: '面试导入', value: 'interview_import' },
@@ -69,6 +70,7 @@ export function AgentWorkbenchPage() {
   const [focusQuery, setFocusQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [running, setRunning] = useState(false);
+  const [planning, setPlanning] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workbenchRefreshKey, setWorkbenchRefreshKey] = useState(0);
@@ -193,6 +195,107 @@ export function AgentWorkbenchPage() {
     }
   }
 
+  async function handleGenerateTodosFromHub() {
+    const goal = agentInput.trim() || focusQuery.trim() || '基于当前面试画像生成下一轮学习计划';
+    const query = currentFocus.trim() || extractFocusTerms(goal).join(' ');
+    let runId: number | null = null;
+    let activeStepId: number | null = null;
+
+    setPlanning(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const run = await window.electronAPI.createAgentRun({
+        type: 'study_planning',
+        title: '个人面试助手：生成学习计划',
+        input_summary: `目标: ${goal}\n焦点: ${query || '自动识别'}\n来源: 2.0 Agent 中枢`,
+      });
+      runId = run.id;
+      await window.electronAPI.updateAgentRun(run.id, { status: 'running' });
+
+      const profileStep = await window.electronAPI.createAgentStep({
+        run_id: run.id,
+        name: '汇总个人面试画像',
+        order_index: 1,
+        input: JSON.stringify({
+          interviews: snapshot.interviews.length,
+          unresolvedWrongAnswers: snapshot.wrongAnswers.length,
+          pendingPlans: snapshot.plans.filter((plan) => plan.status !== 'done').length,
+          hasCandidateProfile: Boolean(snapshot.profile?.resume_text || snapshot.profile?.job_context),
+        }, null, 2),
+      });
+      await window.electronAPI.updateAgentStep(profileStep.id, {
+        status: 'completed',
+        output: `资料 ${docStats.files} 个文件，复盘 ${snapshot.interviews.length} 条，未解决错题 ${snapshot.wrongAnswers.length} 道，未完成计划 ${snapshot.plans.filter((plan) => plan.status !== 'done').length} 个。`,
+      });
+
+      const searchStep = await window.electronAPI.createAgentStep({
+        run_id: run.id,
+        name: '检索本地资料候选集',
+        order_index: 2,
+        input: `query: ${query || goal}`,
+      });
+      activeStepId = searchStep.id;
+      const results = query ? (await window.electronAPI.searchDocuments(query)).slice(0, 8) : [];
+      setSearchResults(results);
+      await window.electronAPI.updateAgentStep(searchStep.id, {
+        status: 'completed',
+        output: results.length
+          ? results.map((item, index) => `${index + 1}. ${item.fileName}:${item.lineNumber} ${item.excerpt}`).join('\n')
+          : '没有找到直接命中文档，将回退到资料库与候选人画像生成计划。',
+      });
+
+      const generateStep = await window.electronAPI.createAgentStep({
+        run_id: run.id,
+        name: 'DeepSeek 生成 TODO 学习计划',
+        order_index: 3,
+        input: JSON.stringify({
+          goal,
+          focus: query || undefined,
+          files: Array.from(new Set(results.map((item) => item.filePath))).slice(0, 8),
+          count: 6,
+        }, null, 2),
+      });
+      activeStepId = generateStep.id;
+      await window.electronAPI.updateAgentStep(generateStep.id, { status: 'running' });
+
+      const generated = await window.electronAPI.generateStudyTodos({
+        goal,
+        focus: query || undefined,
+        files: Array.from(new Set(results.map((item) => item.filePath))).slice(0, 8),
+        count: 6,
+      });
+
+      await window.electronAPI.updateAgentStep(generateStep.id, {
+        status: 'completed',
+        output: generated.map((plan, index) => `${index + 1}. ${plan.title} · ${plan.category || '未分类'} · priority ${plan.priority}`).join('\n'),
+      });
+      await window.electronAPI.updateAgentRun(run.id, {
+        status: 'completed',
+        output_summary: `已生成 ${generated.length} 个 TODO 学习计划，并写入学习计划列表。`,
+      });
+
+      setNotice(`已从 Agent 中枢生成 ${generated.length} 个 TODO 学习计划。`);
+      await loadSnapshot();
+      setWorkbenchRefreshKey((value) => value + 1);
+    } catch (e) {
+      const message = formatError(e);
+      if (activeStepId !== null) {
+        await window.electronAPI.updateAgentStep(activeStepId, { status: 'failed', error: message }).catch(() => undefined);
+      }
+      if (runId !== null) {
+        await window.electronAPI.updateAgentRun(runId, {
+          status: 'failed',
+          output_summary: message,
+        }).catch(() => undefined);
+      }
+      setWorkbenchRefreshKey((value) => value + 1);
+      setError(message === 'NO_API_KEY' ? '请先在设置页填入 DeepSeek API Key，再生成学习计划。' : message);
+    } finally {
+      setPlanning(false);
+    }
+  }
+
   async function maybeCreateInterview(content: string, query: string) {
     if (assistantMode !== 'debrief') return null;
     const company = inferCompany(content) || '未命名面试复盘';
@@ -301,6 +404,28 @@ export function AgentWorkbenchPage() {
               </div>
             ))}
           </div>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-3">
+            <ActionCard
+              title="生成 TODO 学习计划"
+              body="使用当前复盘/焦点、本地检索结果、简历画像和错题状态，直接写入学习计划。"
+              buttonLabel="生成计划"
+              loading={planning}
+              onClick={handleGenerateTodosFromHub}
+            />
+            <ActionCard
+              title="查看待执行计划"
+              body="进入 1.0 学习计划页，调整优先级、删除或继续生成学习资料。"
+              buttonLabel="打开计划"
+              onClick={() => navigate('/plan')}
+            />
+            <ActionCard
+              title="针对弱点出题"
+              body="进入测验页，沿用智能出题 Agent，从错题和复盘资料中筛选题源。"
+              buttonLabel="打开测验"
+              onClick={() => navigate('/quiz')}
+            />
+          </div>
         </div>
 
         <aside className="space-y-4">
@@ -383,6 +508,24 @@ function InsightCard({ insight }: { insight: LocalInsight }) {
         <Badge color={insight.tone}>{insight.title}</Badge>
       </div>
       <p className="mt-2 text-xs leading-5 text-gray-600 dark:text-gray-300">{insight.body}</p>
+    </div>
+  );
+}
+
+function ActionCard({ title, body, buttonLabel, loading, onClick }: {
+  title: string;
+  body: string;
+  buttonLabel: string;
+  loading?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-950/40">
+      <p className="text-sm font-semibold text-gray-900 dark:text-white">{title}</p>
+      <p className="mt-1 min-h-[40px] text-xs leading-5 text-gray-500 dark:text-gray-400">{body}</p>
+      <Button className="mt-3 w-full" size="sm" variant="secondary" loading={loading} onClick={onClick}>
+        {buttonLabel}
+      </Button>
     </div>
   );
 }

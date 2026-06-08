@@ -22,6 +22,7 @@ interface ParsedBlueprint {
 
 const typeLabels: Record<AgentRunType, string> = {
   quiz_generation: '智能出题',
+  study_planning: '学习编排',
   material_generation: '资料生成',
   wrong_answer_review: '错题复盘',
   interview_import: '面试导入',

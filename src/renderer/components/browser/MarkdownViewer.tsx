@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { extractHeadings } from './MarkdownToc';
 
 interface MarkdownViewerProps {
   content: string;
@@ -19,6 +20,30 @@ export function MarkdownViewer({ content, filePath }: MarkdownViewerProps) {
     base: 'prose-base',
     lg: 'prose-lg',
   }[fontSize];
+
+  // Pre-compute heading IDs using the same extractHeadings as MarkdownToc.
+  // This returns TocItem[] in document order with unique IDs for duplicates.
+  const tocItems = useMemo(() => extractHeadings(content), [content]);
+
+  // Custom heading renderers that assign anchor IDs by document order.
+  // Since ReactMarkdown renders headings sequentially, a mutable counter
+  // reset on each render gives each heading the correct nth TocItem id.
+  let headingIndex = 0;
+
+  const headingComponents: Record<string, React.FC<any>> = {
+    h1: ({ children, ...props }: any) => {
+      const id = tocItems[headingIndex++]?.id;
+      return <h1 {...props} id={id || undefined}>{children}</h1>;
+    },
+    h2: ({ children, ...props }: any) => {
+      const id = tocItems[headingIndex++]?.id;
+      return <h2 {...props} id={id || undefined}>{children}</h2>;
+    },
+    h3: ({ children, ...props }: any) => {
+      const id = tocItems[headingIndex++]?.id;
+      return <h3 {...props} id={id || undefined}>{children}</h3>;
+    },
+  };
 
   return (
     <div className="max-w-4xl">
@@ -75,6 +100,7 @@ export function MarkdownViewer({ content, filePath }: MarkdownViewerProps) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
+            components={headingComponents}
           >
             {content}
           </ReactMarkdown>

@@ -22,6 +22,14 @@ const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 const DEFAULT_API_TIMEOUT_MS = 60_000;
 const THINKING_API_TIMEOUT_MS = 180_000;
 
+interface QuizModelStrategy {
+  model: string;
+  thinkingEnabled: boolean;
+  reasoningEffort: 'medium' | 'high';
+  timeoutMs: number;
+  reason: string;
+}
+
 function buildPrompt(files: string[], questionCount: number, topic?: string): { system: string; user: string } {
   const focusInstruction = topic
     ? `题目应重点围绕"${topic}"展开。`
@@ -447,7 +455,12 @@ async function generateQuizSmartAgent(input: QuizGenerateInput): Promise<QuizSes
     // ════════════════════════════════════════════
     // Step 5: DeepSeek thinking 生成中文试题
     // ════════════════════════════════════════════
-    const step5Id = createStep('DeepSeek thinking 生成中文试题', 5);
+    const modelStrategy = chooseQuizModelStrategy(input, selectedResult);
+    const step5Id = createStep(
+      `${modelStrategy.thinkingEnabled ? 'DeepSeek thinking' : 'DeepSeek'} 生成中文试题`,
+      5,
+      JSON.stringify(modelStrategy, null, 2)
+    );
     currentStepId = step5Id;
     updateStep(step5Id, 'running');
 
@@ -461,17 +474,19 @@ async function generateQuizSmartAgent(input: QuizGenerateInput): Promise<QuizSes
     );
 
     const requestBody: any = {
-      model: 'deepseek-v4-pro',
+      model: modelStrategy.model,
       messages: [
         { role: 'system', content: smartSystem },
         { role: 'user', content: smartUser },
       ],
       stream: false,
-      thinking: { type: 'enabled' },
-      reasoning_effort: 'high',
+      reasoning_effort: modelStrategy.reasoningEffort,
     };
+    if (modelStrategy.thinkingEnabled) {
+      requestBody.thinking = { type: 'enabled' };
+    }
 
-    const response = await apiRequest(requestBody, apiKey, THINKING_API_TIMEOUT_MS);
+    const response = await apiRequest(requestBody, apiKey, modelStrategy.timeoutMs);
     const responseContent = response.choices?.[0]?.message?.content;
     if (!responseContent) throw new Error('DeepSeek 返回空响应');
 
@@ -488,17 +503,19 @@ async function generateQuizSmartAgent(input: QuizGenerateInput): Promise<QuizSes
 
       const repairPrompt = buildRepairPrompt(smartUser, responseContent, firstError.message, input.questionCount);
       const repairBody: any = {
-        model: 'deepseek-v4-pro',
+        model: modelStrategy.model,
         messages: [
           { role: 'system', content: smartSystem },
           { role: 'user', content: repairPrompt },
         ],
         stream: false,
-        thinking: { type: 'enabled' },
-        reasoning_effort: 'high',
+        reasoning_effort: modelStrategy.reasoningEffort,
       };
+      if (modelStrategy.thinkingEnabled) {
+        repairBody.thinking = { type: 'enabled' };
+      }
 
-      const repairResponse = await apiRequest(repairBody, apiKey, THINKING_API_TIMEOUT_MS);
+      const repairResponse = await apiRequest(repairBody, apiKey, modelStrategy.timeoutMs);
 
       try {
         questions = parseQuizResponse(repairResponse);
@@ -670,6 +687,22 @@ ${sources}
 请基于上述资料和候选人的弱点分析，生成 ${questionCount} 道有针对性且高质量的多选题。题目应重点考察候选人的薄弱环节，帮助其巩固知识。`;
 
   return { system, user };
+}
+
+function chooseQuizModelStrategy(input: QuizGenerateInput, selectedResult: QuizSourceResult): QuizModelStrategy {
+  const thinkingEnabled = input.enableThinking !== false;
+  const highComplexity = input.questionCount >= 8 || selectedResult.selectedFiles.length >= 6 || !!(input.focus || input.topic);
+  const reasoningEffort: QuizModelStrategy['reasoningEffort'] = highComplexity ? 'high' : 'medium';
+
+  return {
+    model: 'deepseek-v4-pro',
+    thinkingEnabled,
+    reasoningEffort,
+    timeoutMs: thinkingEnabled ? THINKING_API_TIMEOUT_MS : DEFAULT_API_TIMEOUT_MS,
+    reason: highComplexity
+      ? '出题需要结合弱点、多个本地资料和面试焦点，使用 v4-pro thinking 与高推理强度保证题目质量。'
+      : '资料范围较小，仍使用 v4-pro 生成结构化中文试题；thinking 可按调用参数关闭。',
+  };
 }
 
 function validateQuizQuestions(questions: any[], expectedCount: number): string | null {

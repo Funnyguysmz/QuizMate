@@ -7,6 +7,7 @@ const navItems = [
   { to: '/plan', label: '学习计划', icon: CheckSquareIcon },
   { to: '/quiz', label: '测验练习', icon: BrainIcon },
   { to: '/wrong-answers', label: '错题回顾', icon: AlertCircleIcon },
+  { to: '/agents', label: 'Agent 工作台', icon: AgentIcon },
   { to: '/mock-interview', label: '模拟面试', icon: MicIcon, badge: 'TODO' },
   { to: '/ios', label: 'iOS App', icon: SmartphoneIcon, badge: 'TODO' },
 ];
@@ -83,6 +84,10 @@ function BrainIcon({ className }: { className?: string }) {
 
 function AlertCircleIcon({ className }: { className?: string }) {
   return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>;
+}
+
+function AgentIcon({ className }: { className?: string }) {
+  return <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 9h8m-8 4h5m-8 8h14a2 2 0 002-2V7.5L16.5 3H5a2 2 0 00-2 2v14a2 2 0 002 2z" /><path strokeLinecap="round" strokeLinejoin="round" d="M16 3v5h5" /></svg>;
 }
 
 function MicIcon({ className }: { className?: string }) {

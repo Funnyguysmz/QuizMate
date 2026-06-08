@@ -6,6 +6,7 @@ const pageTitles: Record<string, string> = {
   '/plan': '学习计划',
   '/quiz': '测验练习',
   '/wrong-answers': '错题回顾',
+  '/agents': 'Agent 工作台',
   '/mock-interview': '模拟面试',
   '/ios': 'iOS App',
   '/settings': '设置',

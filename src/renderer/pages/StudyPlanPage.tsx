@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { StudyPlanList } from '../components/plan/StudyPlanList';
 import { StudyPlanForm } from '../components/plan/StudyPlanForm';
 import { StudyPlanFilters } from '../components/plan/StudyPlanFilters';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { EmptyState } from '../components/shared/EmptyState';
 import { Button } from '../components/shared/Button';
-import { MarkdownViewer } from '../components/browser/MarkdownViewer';
 import type { AppSettings, CreatePlanInput, PlanFilters, StudyPlan, UpdatePlanInput } from '../../shared/types';
 
 type BusyAction = 'todos' | 'materials' | null;
@@ -23,8 +23,8 @@ export function StudyPlanPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingPlan, setEditingPlan] = useState<StudyPlan | null>(null);
   const [filters, setFilters] = useState<PlanFilters>({});
-  const [activePlan, setActivePlan] = useState<StudyPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
   const [notice, setNotice] = useState<string | null>(null);
   const [profileStatus, setProfileStatus] = useState<{
     hasResume: boolean;
@@ -50,10 +50,6 @@ export function StudyPlanPage() {
     const done = plans.filter((plan) => plan.status === 'done').length;
     const materials = plans.filter((plan) => plan.generated_material || plan.material_file).length;
     return { done, materials, total: plans.length };
-  }, [plans]);
-
-  const hasMaterials = useMemo(() => {
-    return plans.some((p) => p.generated_material || p.material_file);
   }, [plans]);
 
   const [materialStepIndex, setMaterialStepIndex] = useState(0);
@@ -105,15 +101,6 @@ export function StudyPlanPage() {
     try {
       const data = await window.electronAPI.getPlans(filters);
       setPlans(data);
-      setActivePlan((current) => {
-        if (!current) return null;
-        const refreshed = data.find((plan) => plan.id === current.id);
-        if (!refreshed) return current;
-        return {
-          ...refreshed,
-          generated_material: refreshed.generated_material || current.generated_material,
-        };
-      });
     } catch (e) {
       setError(formatError(e));
     }
@@ -158,7 +145,6 @@ export function StudyPlanPage() {
       });
       setNotice(`已生成 ${result.plans.filter((plan) => plan.material_file).length} 份学习资料，保存在 ${result.outputDirectory}`);
       await loadPlans();
-      setActivePlan(result.plans.find((plan) => plan.generated_material) || null);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -177,7 +163,6 @@ export function StudyPlanPage() {
       });
       setNotice(`已为「${plan.title}」生成学习资料`);
       await loadPlans();
-      setActivePlan(result.plans[0] || null);
     } catch (e) {
       setError(formatError(e));
     } finally {
@@ -200,7 +185,6 @@ export function StudyPlanPage() {
 
   async function handleDelete(id: number) {
     await window.electronAPI.deletePlan(id);
-    if (activePlan?.id === id) setActivePlan(null);
     await loadPlans();
   }
 
@@ -214,26 +198,11 @@ export function StudyPlanPage() {
     setShowForm(true);
   }
 
-  async function handleStudy(plan: StudyPlan) {
-    setError(null);
-
-    let planForReading = plan;
-    if (!plan.generated_material && plan.material_file) {
-      try {
-        const content = await window.electronAPI.readMarkdownFile(plan.material_file);
-        planForReading = {
-          ...plan,
-          generated_material: content,
-        };
-      } catch (e) {
-        setError(`读取学习资料失败：${formatError(e)}`);
-      }
-    }
-
-    setActivePlan(planForReading);
+  function handleStudy(plan: StudyPlan) {
     if (plan.status === 'pending') {
       window.electronAPI.updatePlan(plan.id, { status: 'in_progress' }).then(loadPlans).catch(() => undefined);
     }
+    navigate(`/plan/${plan.id}/study`);
   }
 
   if (loading) {
@@ -417,63 +386,27 @@ export function StudyPlanPage() {
         )}
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
-        <section className="min-w-0 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <StudyPlanFilters filters={filters} onChange={setFilters} />
-          </div>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <StudyPlanFilters filters={filters} onChange={setFilters} />
+        </div>
 
-          {plans.length === 0 ? (
-            <EmptyState
-              icon={<PlanIcon />}
-              title="还没有学习计划"
-              description="使用 AI 生成 TODO，或者先手动添加一个条目"
-            />
-          ) : (
-            <StudyPlanList
-              plans={plans}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onStatusChange={handleStatusChange}
-              onStudy={handleStudy}
-              onGenerateMaterial={handleGenerateSingleMaterial}
-            />
-          )}
-        </section>
-
-        <section className="min-h-[520px] min-w-0 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
-          {activePlan?.generated_material ? (
-            <div className="h-full overflow-auto p-6">
-              <MarkdownViewer content={activePlan.generated_material} filePath={activePlan.material_file || activePlan.title} />
-            </div>
-          ) : plans.length > 0 ? (
-            <div className="flex h-full flex-col items-center justify-center p-8">
-              <EmptyState
-                icon={<StudyIcon />}
-                title="准备开始学习"
-                description={hasMaterials
-                  ? '点击左侧计划卡片上的「进入学习」按钮查看已生成的学习资料'
-                  : '还没有生成学习资料。请先在左侧选择计划，然后点击「下一步」生成资料'
-                }
-              />
-              {!hasMaterials && plans.length > 0 && (
-                <div className="flex justify-center pb-4">
-                  <Button onClick={handleGenerateMaterials} loading={busyAction === 'materials'} size="sm">
-                    为所有计划生成资料
-                  </Button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex h-full items-center justify-center p-8">
-              <EmptyState
-                icon={<StudyIcon />}
-                title="还没有学习计划"
-                description="请先在左侧生成或手动创建学习计划"
-              />
-            </div>
-          )}
-        </section>
+        {plans.length === 0 ? (
+          <EmptyState
+            icon={<PlanIcon />}
+            title="还没有学习计划"
+            description="使用 AI 生成 TODO，或者先手动添加一个条目"
+          />
+        ) : (
+          <StudyPlanList
+            plans={plans}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onStatusChange={handleStatusChange}
+            onStudy={handleStudy}
+            onGenerateMaterial={handleGenerateSingleMaterial}
+          />
+        )}
       </div>
 
       {showForm && (
@@ -537,14 +470,6 @@ function PlanIcon() {
   return (
     <svg className="h-16 w-16 text-gray-300 dark:text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-    </svg>
-  );
-}
-
-function StudyIcon() {
-  return (
-    <svg className="h-16 w-16 text-gray-300 dark:text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5S19.832 5.477 21 6.253v13C19.832 18.477 18.246 18 16.5 18s-3.332.477-4.5 1.253" />
     </svg>
   );
 }

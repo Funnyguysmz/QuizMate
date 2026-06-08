@@ -8,6 +8,8 @@ import { QuizSessionPage } from './pages/QuizSessionPage';
 import { WrongAnswerPage } from './pages/WrongAnswerPage';
 import { MockInterviewPage } from './pages/MockInterviewPage';
 import { IOSPage } from './pages/IOSPage';
+import { StudyMaterialPage } from './pages/StudyMaterialPage';
+import { AgentWorkbenchPage } from './pages/AgentWorkbenchPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 export function App() {
@@ -18,9 +20,11 @@ export function App() {
           <Route path="/" element={<Navigate to="/browser" replace />} />
           <Route path="/browser" element={<DocumentBrowserPage />} />
           <Route path="/plan" element={<StudyPlanPage />} />
+          <Route path="/plan/:planId/study" element={<StudyMaterialPage />} />
           <Route path="/quiz" element={<QuizPage />} />
           <Route path="/quiz/:sessionId" element={<QuizSessionPage />} />
           <Route path="/wrong-answers" element={<WrongAnswerPage />} />
+          <Route path="/agents" element={<AgentWorkbenchPage />} />
           <Route path="/mock-interview" element={<MockInterviewPage />} />
           <Route path="/ios" element={<IOSPage />} />
           <Route path="/settings" element={<SettingsPage />} />

@@ -36,6 +36,14 @@ interface LocalInsight {
   tone: 'red' | 'yellow' | 'green' | 'blue' | 'purple';
 }
 
+interface WeaknessTopic {
+  topic: string;
+  score: number;
+  evidence: string[];
+  action: string;
+  roi: '高' | '中' | '低';
+}
+
 const filters: Array<{ label: string; value: AgentRunType | 'all' }> = [
   { label: '全部', value: 'all' },
   { label: '智能出题', value: 'quiz_generation' },
@@ -71,6 +79,7 @@ export function AgentWorkbenchPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [running, setRunning] = useState(false);
   const [planning, setPlanning] = useState(false);
+  const [analyzingWeakness, setAnalyzingWeakness] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workbenchRefreshKey, setWorkbenchRefreshKey] = useState(0);
@@ -104,6 +113,7 @@ export function AgentWorkbenchPage() {
   const docStats = useMemo(() => countFileTree(snapshot.fileTree), [snapshot.fileTree]);
   const insights = useMemo(() => buildInsights(snapshot, docStats), [snapshot, docStats]);
   const nextActions = useMemo(() => buildNextActions(snapshot, agentInput || focusQuery), [snapshot, agentInput, focusQuery]);
+  const weaknessTopics = useMemo(() => buildWeaknessTopics(snapshot, agentInput || focusQuery), [snapshot, agentInput, focusQuery]);
   const currentFocus = focusQuery.trim() || extractFocusTerms(agentInput).join(' ');
 
   async function handleLocalSearch() {
@@ -296,6 +306,61 @@ export function AgentWorkbenchPage() {
     }
   }
 
+  async function handlePersistWeaknessSnapshot() {
+    setAnalyzingWeakness(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const run = await window.electronAPI.createAgentRun({
+        type: 'wrong_answer_review',
+        title: '个人面试助手：弱点与 ROI 快照',
+        input_summary: `来源: 2.0 Agent 中枢\n主题数: ${weaknessTopics.length}\n复盘: ${snapshot.interviews.length} 条\n未解决错题: ${snapshot.wrongAnswers.length} 道`,
+      });
+      await window.electronAPI.updateAgentRun(run.id, { status: 'running' });
+
+      const evidenceStep = await window.electronAPI.createAgentStep({
+        run_id: run.id,
+        name: '汇总弱点证据',
+        order_index: 1,
+        input: JSON.stringify({
+          unresolvedWrongAnswers: snapshot.wrongAnswers.map((item) => ({ category: item.category, question: item.question_text.slice(0, 80) })),
+          interviews: snapshot.interviews.map((item) => ({ company: item.company, result: item.result, focus: item.interviewer_focus })),
+          pendingPlans: snapshot.plans.filter((plan) => plan.status !== 'done').map((plan) => plan.title).slice(0, 12),
+        }, null, 2),
+      });
+      await window.electronAPI.updateAgentStep(evidenceStep.id, {
+        status: 'completed',
+        output: `收集 ${snapshot.wrongAnswers.length} 道未解决错题、${snapshot.interviews.length} 条面试记录、${snapshot.plans.filter((plan) => plan.status !== 'done').length} 个未完成计划。`,
+      });
+
+      const rankingStep = await window.electronAPI.createAgentStep({
+        run_id: run.id,
+        name: '计算弱点 ROI 排序',
+        order_index: 2,
+        input: JSON.stringify({ method: 'local-weighted-ranking', weights: { wrongAnswer: 5, failedInterview: 4, pendingPlan: 2, currentInput: 3, failedRun: 2 } }, null, 2),
+      });
+      await window.electronAPI.updateAgentStep(rankingStep.id, {
+        status: 'completed',
+        output: weaknessTopics.map((topic, index) => `${index + 1}. ${topic.topic} · ROI ${topic.roi} · score ${topic.score}\n证据: ${topic.evidence.join('；')}\n行动: ${topic.action}`).join('\n\n'),
+      });
+
+      await window.electronAPI.updateAgentRun(run.id, {
+        status: 'completed',
+        output_summary: weaknessTopics.length
+          ? `已生成 ${weaknessTopics.length} 个弱点主题排序，最高优先级：${weaknessTopics[0].topic}。`
+          : '暂无足够证据生成弱点排序。',
+      });
+
+      setNotice('已把当前弱点与 ROI 排序沉淀到 Agent 执行日志。');
+      await loadSnapshot();
+      setWorkbenchRefreshKey((value) => value + 1);
+    } catch (e) {
+      setError(formatError(e));
+    } finally {
+      setAnalyzingWeakness(false);
+    }
+  }
+
   async function maybeCreateInterview(content: string, query: string) {
     if (assistantMode !== 'debrief') return null;
     const company = inferCompany(content) || '未命名面试复盘';
@@ -463,6 +528,39 @@ export function AgentWorkbenchPage() {
         </aside>
       </section>
 
+      <section className="rounded-lg border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-950 dark:text-white">弱点与面试 ROI 排序</h3>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              基于错题、复盘、未完成计划和历史失败 run 做本地加权排序，帮助 Agent 决定下一步优先补什么。
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" loading={analyzingWeakness} onClick={handlePersistWeaknessSnapshot}>
+            沉淀弱点快照
+          </Button>
+        </div>
+
+        {weaknessTopics.length === 0 ? (
+          <div className="mt-4 rounded-lg border border-dashed border-gray-200 bg-gray-50 p-5 text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-950/40 dark:text-gray-400">
+            暂无足够证据。录入一次面试复盘、完成一轮测验或生成学习计划后，这里会开始形成排序。
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+            {weaknessTopics.map((topic) => (
+              <WeaknessCard
+                key={topic.topic}
+                topic={topic}
+                onFocus={() => {
+                  setFocusQuery(topic.topic);
+                  setAgentInput((current) => current || `围绕 ${topic.topic} 生成下一轮面试提升计划。`);
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -525,6 +623,31 @@ function ActionCard({ title, body, buttonLabel, loading, onClick }: {
       <p className="mt-1 min-h-[40px] text-xs leading-5 text-gray-500 dark:text-gray-400">{body}</p>
       <Button className="mt-3 w-full" size="sm" variant="secondary" loading={loading} onClick={onClick}>
         {buttonLabel}
+      </Button>
+    </div>
+  );
+}
+
+function WeaknessCard({ topic, onFocus }: { topic: WeaknessTopic; onFocus: () => void }) {
+  const roiColor = topic.roi === '高' ? 'red' : topic.roi === '中' ? 'yellow' : 'gray';
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-800 dark:bg-gray-950/40">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-gray-950 dark:text-white">{topic.topic}</p>
+          <p className="mt-1 text-xs text-gray-400">score {topic.score}</p>
+        </div>
+        <Badge color={roiColor}>ROI {topic.roi}</Badge>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        {topic.evidence.slice(0, 3).map((item) => (
+          <p key={item} className="line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{item}</p>
+        ))}
+      </div>
+      <p className="mt-3 text-xs leading-5 text-gray-700 dark:text-gray-300">{topic.action}</p>
+      <Button className="mt-3 w-full" size="sm" variant="secondary" onClick={onFocus}>
+        设为当前焦点
       </Button>
     </div>
   );
@@ -599,6 +722,88 @@ function buildNextActions(snapshot: AgentSnapshot, rawFocus: string): string[] {
       ? '把最近面试记录里的追问失败点转成 mock interview 问题。'
       : '先沉淀第一条结构化面试记录，建立可持续追踪的样本库。',
   ];
+}
+
+function buildWeaknessTopics(snapshot: AgentSnapshot, rawFocus: string): WeaknessTopic[] {
+  const topicMap = new Map<string, { score: number; evidence: string[] }>();
+
+  const add = (topic: string, score: number, evidence: string) => {
+    const normalized = normalizeTopic(topic);
+    if (!normalized) return;
+    const current = topicMap.get(normalized) || { score: 0, evidence: [] };
+    current.score += score;
+    if (!current.evidence.includes(evidence)) current.evidence.push(evidence);
+    topicMap.set(normalized, current);
+  };
+
+  for (const term of extractFocusTerms(rawFocus)) {
+    add(term, 3, '来自当前输入或手动焦点');
+  }
+
+  for (const wrong of snapshot.wrongAnswers) {
+    const terms = wrong.category ? [wrong.category] : extractFocusTerms(`${wrong.question_text} ${wrong.explanation || ''}`);
+    for (const term of terms) {
+      add(term, 5 + Math.min(wrong.review_count, 3), `未解决错题：${wrong.question_text.slice(0, 52)}`);
+    }
+  }
+
+  for (const interview of snapshot.interviews) {
+    const text = `${interview.company} ${interview.interviewer_focus || ''} ${interview.observations || ''} ${interview.raw_notes || ''}`;
+    const base = interview.result === 'failed' ? 4 : interview.result === 'unknown' ? 2 : 1;
+    for (const term of extractFocusTerms(text)) {
+      add(term, base, `${interview.company} ${interview.result === 'failed' ? '未通过' : '复盘'}：${(interview.interviewer_focus || interview.observations || '').slice(0, 48) || '有面试记录'}`);
+    }
+  }
+
+  for (const plan of snapshot.plans.filter((item) => item.status !== 'done')) {
+    const priorityWeight = plan.priority >= 4 ? 3 : plan.priority >= 2 ? 2 : 1;
+    for (const term of extractFocusTerms(`${plan.title} ${plan.category || ''} ${plan.tags.join(' ')} ${plan.notes || ''}`)) {
+      add(term, priorityWeight, `未完成计划：${plan.title}`);
+    }
+  }
+
+  for (const run of snapshot.recentRuns.filter((item) => item.status === 'failed').slice(0, 8)) {
+    for (const term of extractFocusTerms(`${run.title} ${run.input_summary || ''} ${run.output_summary || ''}`)) {
+      add(term, 2, `失败 run：${run.title}`);
+    }
+  }
+
+  return Array.from(topicMap.entries())
+    .map(([topic, value]) => ({
+      topic,
+      score: value.score,
+      evidence: value.evidence.slice(0, 5),
+      roi: value.score >= 9 ? '高' as const : value.score >= 5 ? '中' as const : '低' as const,
+      action: buildTopicAction(topic, value.score),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6);
+}
+
+function normalizeTopic(topic: string): string | null {
+  const trimmed = topic.trim();
+  if (!trimmed) return null;
+  const aliases: Record<string, string> = {
+    协程: 'Coroutine',
+    recycler: 'RecyclerView',
+    rv: 'RecyclerView',
+    viewmodel: 'ViewModel',
+    stateflow: 'StateFlow',
+    sharedflow: 'SharedFlow',
+    handler: 'Handler',
+    binder: 'Binder',
+  };
+  return aliases[trimmed.toLowerCase()] || trimmed;
+}
+
+function buildTopicAction(topic: string, score: number): string {
+  if (score >= 9) {
+    return `优先生成 ${topic} 深挖资料和 8-10 道追问题，先补高频失败点。`;
+  }
+  if (score >= 5) {
+    return `把 ${topic} 放入本周计划，并用本地资料做一次针对性复盘。`;
+  }
+  return `保留 ${topic} 作为观察项，等待更多复盘或错题证据。`;
 }
 
 function countFileTree(nodes: FileNode[]) {
